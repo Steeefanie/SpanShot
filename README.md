@@ -1,13 +1,15 @@
 # SpanShot — 轻量高精度跨平台（Windows / macOS）横纵长截图工具
 
-**SpanShot** 是一款极轻量级、零第三方依赖的截图与横纵长图拼接工具，支持**普通区域截图**、**纵向长截图（Vertical Scrolling Capture）**与**横向长截图（Horizontal Scrolling Capture）**。
+**SpanShot** 是一款极轻量级、零第三方依赖的原生截图与横纵长图拼接工具，支持**普通区域截图**、**纵向长截图（Vertical Scrolling Capture）**与**横向长截图（Horizontal Scrolling Capture）**。
 
 ---
 
-## 📁 仓库结构（单主分支双端共建）
+## 📦 下载安装（GitHub Releases）
 
-- **`src/` & `build.ps1`（Windows 端）**：基于 C# + Win32 原生 API，使用系统内置 `csc.exe` 一键编译出单文件 `SpanShot.exe`（~96 KB）。
-- **`macos/`（macOS 端）**：基于 Swift + AppKit + CoreGraphics，使用 `macos/build_dmg.sh` 一键编译打包出 `SpanShot.app` 与 `SpanShot.dmg`。
+请直接前往 [**GitHub Releases 页面**](https://github.com/Steeefanie/SpanShot/releases/latest) 下载对应系统的安装包：
+
+- **Windows 版**：下载 **`SpanShot.exe`**（单文件绿色免安装，~96 KB，双击即用）
+- **macOS 版**：下载 **`SpanShot.dmg`**（拖入 Applications 即可使用）
 
 ---
 
@@ -24,7 +26,14 @@
 
 ---
 
-## 🛠 编译与自动化自测
+## 📁 仓库结构
+
+- **`src/` & `build.ps1`（Windows 端源码）**：基于 C# + Win32 原生 API，使用系统内置 `csc.exe` 编译。
+- **`macos/`（macOS 端源码）**：基于 Swift + AppKit + CoreGraphics，使用 `macos/build_dmg.sh` 编译打包。
+
+---
+
+## 🛠 本地编译与自动化自测
 
 ### Windows (`SpanShot.exe`)
 ```powershell

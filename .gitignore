@@ -1,6 +1,18 @@
+# Build artifacts & binaries (published via GitHub Releases, not tracked in Git)
+*.exe
+*.dll
 *.pdb
+*.dmg
+*.pkg
+*.zip
+*.app/
+build/
+dist/
+macos/build/
+
+# IDE & OS files
 *.user
 *.suo
 .vs/
+.vscode/
 .DS_Store
-macos/build/
