@@ -1,0 +1,6 @@
+*.pdb
+*.user
+*.suo
+.vs/
+.DS_Store
+macos/build/
