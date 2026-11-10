@@ -48,7 +48,7 @@ public final class StitchEngine {
     private static let SAMPLE_COUNT = 64
     private static let SCROLLBAR_MARGIN = 18
     private static let LEADING_BORDER_MARGIN = 6
-    private static let MAX_CANVAS_LENGTH = 30000
+    private static let MAX_CANVAS_LENGTH = 60000
 
     private let _direction: ScrollDirection
     private var _prevFrame: NormalizedFrame?
@@ -680,8 +680,9 @@ public final class StitchEngine {
 
         let width = _direction == .vertical ? _crossDimension : _totalCanvasLength
         let height = _direction == .vertical ? _totalCanvasLength : _crossDimension
+        let scale = _strips.first?.bitmap.scaleFactor ?? 1.0
 
-        let result = RawBitmap(width: width, height: height)
+        let result = RawBitmap(width: width, height: height, scaleFactor: scale)
         for s in _strips {
             if s.length <= 0 { continue }
             if _direction == .vertical {

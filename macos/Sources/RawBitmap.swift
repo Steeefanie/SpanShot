@@ -9,13 +9,23 @@ public final class RawBitmap {
     public let height: Int
     public let stride: Int
     public let pixels: UnsafeMutablePointer<UInt8>
+    public var scaleFactor: CGFloat
 
-    public init(width: Int, height: Int) {
+    public var logicalWidth: CGFloat {
+        return CGFloat(width) / max(1.0, scaleFactor)
+    }
+
+    public var logicalHeight: CGFloat {
+        return CGFloat(height) / max(1.0, scaleFactor)
+    }
+
+    public init(width: Int, height: Int, scaleFactor: CGFloat = 1.0) {
         let w = max(1, width)
         let h = max(1, height)
         self.width = w
         self.height = h
         self.stride = w * 4
+        self.scaleFactor = max(1.0, scaleFactor)
         let totalBytes = self.stride * h
         self.pixels = UnsafeMutablePointer<UInt8>.allocate(capacity: totalBytes)
         self.pixels.initialize(repeating: 0, count: totalBytes)
@@ -25,11 +35,11 @@ public final class RawBitmap {
         pixels.deallocate()
     }
 
-    public convenience init?(cgImage: CGImage) {
+    public convenience init?(cgImage: CGImage, scaleFactor: CGFloat = 1.0) {
         let w = cgImage.width
         let h = cgImage.height
         guard w > 0 && h > 0 else { return nil }
-        self.init(width: w, height: h)
+        self.init(width: w, height: h, scaleFactor: scaleFactor)
         let colorSpace = CGColorSpaceCreateDeviceRGB()
         let bitmapInfo = CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
         if let ctx = CGContext(
@@ -47,13 +57,13 @@ public final class RawBitmap {
     }
 
     public func clone() -> RawBitmap {
-        let copy = RawBitmap(width: width, height: height)
+        let copy = RawBitmap(width: width, height: height, scaleFactor: scaleFactor)
         memcpy(copy.pixels, pixels, stride * height)
         return copy
     }
 
     public func clone(x: Int, y: Int, width w: Int, height h: Int) -> RawBitmap {
-        let out = RawBitmap(width: w, height: h)
+        let out = RawBitmap(width: w, height: h, scaleFactor: scaleFactor)
         out.copyFrom(src: self, srcX: x, srcY: y, dstX: 0, dstY: 0, width: w, height: h)
         return out
     }
@@ -290,21 +300,24 @@ public final class RawBitmap {
     }
 
     public func toNSImage() -> NSImage {
+        let size = NSSize(width: logicalWidth, height: logicalHeight)
         guard let cg = toCGImage() else {
-            return NSImage(size: NSSize(width: width, height: height))
+            return NSImage(size: size)
         }
-        return NSImage(cgImage: cg, size: NSSize(width: width, height: height))
+        return NSImage(cgImage: cg, size: size)
     }
 
     public func pngData() -> Data? {
         guard let cg = toCGImage() else { return nil }
         let rep = NSBitmapImageRep(cgImage: cg)
+        rep.size = NSSize(width: logicalWidth, height: logicalHeight)
         return rep.representation(using: .png, properties: [:])
     }
 
     public func jpegData(compression: Float = 0.92) -> Data? {
         guard let cg = toCGImage() else { return nil }
         let rep = NSBitmapImageRep(cgImage: cg)
+        rep.size = NSSize(width: logicalWidth, height: logicalHeight)
         return rep.representation(using: .jpeg, properties: [.compressionFactor: compression])
     }
 }

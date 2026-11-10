@@ -11,8 +11,8 @@ public enum CaptureActionMode: Int {
     case horizontalScroll = 5
 }
 
-/// Fullscreen region selector with window auto-snapping, inline annotation tools, and floating toolbar.
-/// 1:1 port of src/RegionSelectorForm.cs.
+/// Fullscreen Retina-native region selector with window auto-snapping, pixel loupe magnifier,
+/// inline annotation tools, and floating toolbar. 1:1 port of src/RegionSelectorForm.cs.
 public final class RegionSelectorForm: NSPanel {
     fileprivate enum ResizeHitZone {
         case none
@@ -48,6 +48,8 @@ public final class RegionSelectorForm: NSPanel {
     fileprivate let desktopSnapshot: RawBitmap
     fileprivate let desktopNSImage: NSImage
     fileprivate let virtualBoundsTopDown: CGRect
+    fileprivate let backingScaleX: CGFloat
+    fileprivate let backingScaleY: CGFloat
     fileprivate let presetMode: CaptureActionMode
     fileprivate let detectedWindows: [CGRect]
 
@@ -82,9 +84,12 @@ public final class RegionSelectorForm: NSPanel {
     fileprivate var colorSwatchRects: [NSRect] = Array(repeating: .zero, count: 5)
 
     fileprivate var mousePos: NSPoint = .zero
+    private var localKeyMonitor: Any?
+    private var globalKeyMonitor: Any?
     private var onComplete: ((RegionSelectorForm) -> Void)?
     private var finished = false
 
+    /// Selected rectangle in global top-down logical screen coordinates (used by ScrollCaptureSessionForm and PinWindowForm).
     public var selectedPhysicalRect: CGRect {
         return CGRect(
             x: selectionRect.origin.x + virtualBoundsTopDown.origin.x,
@@ -103,12 +108,14 @@ public final class RegionSelectorForm: NSPanel {
         self.detectedWindows = ScreenCapturer.getVisibleWindowRectangles()
         self.desktopSnapshot = ScreenCapturer.captureRegion(self.virtualBoundsTopDown)
         self.desktopNSImage = self.desktopSnapshot.toNSImage()
+        self.backingScaleX = CGFloat(self.desktopSnapshot.width) / max(1.0, self.virtualBoundsTopDown.width)
+        self.backingScaleY = CGFloat(self.desktopSnapshot.height) / max(1.0, self.virtualBoundsTopDown.height)
 
         let cocoaFrame = ScreenCapturer.topDownToCocoa(self.virtualBoundsTopDown)
 
         super.init(
             contentRect: cocoaFrame,
-            styleMask: [.borderless, .nonactivatingPanel],
+            styleMask: [.borderless],
             backing: .buffered,
             defer: false
         )
@@ -118,6 +125,7 @@ public final class RegionSelectorForm: NSPanel {
         self.hasShadow = false
         self.sharingType = .none
         self.isReleasedWhenClosed = false
+        self.acceptsMouseMovedEvents = true
         self.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
         let view = SelectorCanvasView(frame: NSRect(x: 0, y: 0, width: cocoaFrame.width, height: cocoaFrame.height))
@@ -127,6 +135,11 @@ public final class RegionSelectorForm: NSPanel {
 
     override public var canBecomeKey: Bool { true }
     override public var canBecomeMain: Bool { true }
+
+    /// Intercept NSPanel's built-in Escape cancelOperation so it never closes without calling onComplete!
+    override public func cancelOperation(_ sender: Any?) {
+        handleEscapeAction()
+    }
 
     public func beginSelection(completion: @escaping (RegionSelectorForm) -> Void) {
         self.onComplete = completion
@@ -140,12 +153,103 @@ public final class RegionSelectorForm: NSPanel {
             y: curTopDown.y - virtualBoundsTopDown.origin.y
         )
         hoverWindowRect = findHoveredWindowRect(localPt: mousePos)
+        updateCursorForPoint(mousePos)
         contentView?.needsDisplay = true
+
+        localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self = self, !self.finished else { return event }
+            if self.handleSelectorKeyDown(event) {
+                return nil
+            }
+            return event
+        }
+
+        globalKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self = self, !self.finished else { return }
+            _ = self.handleSelectorKeyDown(event)
+        }
+    }
+
+    private func cleanupMonitorsAndCursor() {
+        if let lm = localKeyMonitor { NSEvent.removeMonitor(lm); localKeyMonitor = nil }
+        if let gm = globalKeyMonitor { NSEvent.removeMonitor(gm); globalKeyMonitor = nil }
+        NSCursor.arrow.set()
+    }
+
+    fileprivate func handleEscapeAction() {
+        guard !finished else { return }
+        if hasSelection {
+            hasSelection = false
+            selectionRect = .zero
+            activeTool = .none
+            annotations.removeAll()
+            activeDragZone = .none
+            hoverWindowRect = findHoveredWindowRect(localPt: mousePos)
+            updateCursorForPoint(mousePos)
+            contentView?.needsDisplay = true
+        } else {
+            cancelSelection()
+        }
+    }
+
+    @discardableResult
+    fileprivate func handleSelectorKeyDown(_ event: NSEvent) -> Bool {
+        if event.keyCode == 53 { // Escape
+            handleEscapeAction()
+            return true
+        }
+
+        guard hasSelection && selectionRect.width >= 20 && selectionRect.height >= 20 else {
+            return false
+        }
+
+        let hasCmdOrCtrl = event.modifierFlags.contains(.command) || event.modifierFlags.contains(.control)
+        let ch = event.charactersIgnoringModifiers?.lowercased() ?? ""
+
+        if hasCmdOrCtrl && ch == "z" {
+            if !annotations.isEmpty {
+                _ = annotations.popLast()
+                contentView?.needsDisplay = true
+            }
+            return true
+        } else if event.keyCode == 36 || event.keyCode == 76 || event.keyCode == 49 || (hasCmdOrCtrl && ch == "c") {
+            finishNormalWithAction(.normalCopyCompleted)
+            return true
+        } else if ch == "v" && !hasCmdOrCtrl {
+            confirmScrollAction(.verticalScroll)
+            return true
+        } else if ch == "h" && !hasCmdOrCtrl {
+            confirmScrollAction(.horizontalScroll)
+            return true
+        } else if ch == "p" && !hasCmdOrCtrl {
+            finishNormalWithAction(.normalPinCompleted)
+            return true
+        } else if hasCmdOrCtrl && ch == "s" {
+            finishNormalWithAction(.normalSaveCompleted)
+            return true
+        } else if activeTool == .none && (event.keyCode == 123 || event.keyCode == 124 || event.keyCode == 125 || event.keyCode == 126) {
+            let maxW = virtualBoundsTopDown.width
+            let maxH = virtualBoundsTopDown.height
+            let dx: CGFloat = event.keyCode == 123 ? -1 : (event.keyCode == 124 ? 1 : 0)
+            let dy: CGFloat = event.keyCode == 126 ? -1 : (event.keyCode == 125 ? 1 : 0)
+            if event.modifierFlags.contains(.shift) {
+                selectionRect.size.width = max(24, min(maxW - selectionRect.origin.x, selectionRect.width + dx))
+                selectionRect.size.height = max(24, min(maxH - selectionRect.origin.y, selectionRect.height + dy))
+            } else {
+                selectionRect.origin.x = max(0, min(maxW - selectionRect.width, selectionRect.origin.x + dx))
+                selectionRect.origin.y = max(0, min(maxH - selectionRect.height, selectionRect.origin.y + dy))
+            }
+            updateToolbarLayout()
+            contentView?.needsDisplay = true
+            return true
+        }
+        return false
     }
 
     fileprivate func confirmScrollAction(_ scrollMode: CaptureActionMode) {
         guard !finished else { return }
         finished = true
+        cleanupMonitorsAndCursor()
         chosenAction = scrollMode
         self.orderOut(nil)
         onComplete?(self)
@@ -154,6 +258,7 @@ public final class RegionSelectorForm: NSPanel {
     fileprivate func finishNormalWithAction(_ mode: CaptureActionMode) {
         guard !finished else { return }
         finished = true
+        cleanupMonitorsAndCursor()
         annotatedRegionBitmap = renderSelectedRegionWithAnnotations()
         chosenAction = mode
         self.orderOut(nil)
@@ -163,25 +268,26 @@ public final class RegionSelectorForm: NSPanel {
     fileprivate func cancelSelection() {
         guard !finished else { return }
         finished = true
+        cleanupMonitorsAndCursor()
         chosenAction = .none
         self.orderOut(nil)
         onComplete?(self)
     }
 
     private func renderSelectedRegionWithAnnotations() -> RawBitmap {
-        let w = max(1, Int(selectionRect.width))
-        let h = max(1, Int(selectionRect.height))
-        let bmp = desktopSnapshot.clone(
-            x: Int(selectionRect.origin.x),
-            y: Int(selectionRect.origin.y),
-            width: w,
-            height: h
-        )
+        let px = Int((selectionRect.origin.x * backingScaleX).rounded())
+        let py = Int((selectionRect.origin.y * backingScaleY).rounded())
+        let pw = max(1, Int((selectionRect.width * backingScaleX).rounded()))
+        let ph = max(1, Int((selectionRect.height * backingScaleY).rounded()))
+
+        let bmp = desktopSnapshot.clone(x: px, y: py, width: pw, height: ph)
+        bmp.scaleFactor = desktopSnapshot.scaleFactor
         guard !annotations.isEmpty else { return bmp }
 
         bmp.withTopDownCGContext { ctx in
             let prev = NSGraphicsContext.current
             NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: true)
+            ctx.scaleBy(x: backingScaleX, y: backingScaleY)
             ctx.translateBy(x: -selectionRect.origin.x, y: -selectionRect.origin.y)
             for item in annotations {
                 SelectorCanvasView.drawSingleAnnotation(item)
@@ -233,6 +339,43 @@ public final class RegionSelectorForm: NSPanel {
         if nearRight { return .right }
         if r.contains(pt) { return .interior }
         return .none
+    }
+
+    fileprivate func updateCursorForPoint(_ pt: NSPoint) {
+        if hasSelection && !isSelecting {
+            if toolbarBounds.contains(pt) || (activeTool != .none && subBarBounds.contains(pt)) {
+                NSCursor.pointingHand.set()
+                return
+            }
+            if activeTool != .none && selectionRect.contains(pt) {
+                NSCursor.crosshair.set()
+                return
+            }
+            if annotations.isEmpty {
+                let zone = activeDragZone != .none ? activeDragZone : hitTestSelection(pt)
+                switch zone {
+                case .left, .right:
+                    NSCursor.resizeLeftRight.set()
+                    return
+                case .top, .bottom:
+                    NSCursor.resizeUpDown.set()
+                    return
+                case .topLeft, .bottomRight, .topRight, .bottomLeft:
+                    NSCursor.crosshair.set()
+                    return
+                case .interior:
+                    if activeDragZone == .interior {
+                        NSCursor.closedHand.set()
+                    } else {
+                        NSCursor.openHand.set()
+                    }
+                    return
+                case .none:
+                    break
+                }
+            }
+        }
+        NSCursor.crosshair.set()
     }
 
     fileprivate func applyResizeOrMove(_ pt: NSPoint) {
@@ -363,6 +506,8 @@ public final class RegionSelectorForm: NSPanel {
         override func draw(_ dirtyRect: NSRect) {
             guard let owner = owner else { return }
 
+            // Draw full-resolution Retina desktop snapshot 1:1 without interpolation blur
+            NSGraphicsContext.current?.imageInterpolation = .none
             owner.desktopNSImage.draw(
                 in: bounds,
                 from: .zero,
@@ -396,7 +541,7 @@ public final class RegionSelectorForm: NSPanel {
             }
 
             if !owner.hasSelection && !owner.isSelecting && owner.hoverWindowRect.width > 8 && owner.hoverWindowRect.height > 8 {
-                let insetHover = owner.hoverWindowRect.insetBy(dx: 2, dy: 2)
+                let insetHover = owner.hoverWindowRect.insetBy(dx: 1.5, dy: 1.5)
                 UiTheme.weChatGreen.setStroke()
                 let hp = NSBezierPath(rect: insetHover)
                 hp.lineWidth = 3.0
@@ -410,7 +555,7 @@ public final class RegionSelectorForm: NSPanel {
                 } else if owner.presetMode == .horizontalScroll {
                     prompt = "横向长截图 · 请拖动框选区域或点击窗口 (Esc 退出)"
                 } else {
-                    prompt = "请拖动框选区域或点击窗口 (Esc 退出)"
+                    prompt = "请拖动框选区域或点击窗口 · 右键或 Esc 退出"
                 }
                 let font = UiTheme.fontPx(13)
                 let psz = (prompt as NSString).size(withAttributes: [.font: font])
@@ -454,7 +599,9 @@ public final class RegionSelectorForm: NSPanel {
                     drawSquareHandle(x: owner.selectionRect.minX, y: midY)
                 }
 
-                let sizeText = String(format: "%d × %d", Int(owner.selectionRect.width), Int(owner.selectionRect.height))
+                let pxW = Int((owner.selectionRect.width * owner.backingScaleX).rounded())
+                let pxH = Int((owner.selectionRect.height * owner.backingScaleY).rounded())
+                let sizeText = String(format: "%d × %d px", pxW, pxH)
                 let badgeFont = UiTheme.fontPx(12)
                 let tsz = (sizeText as NSString).size(withAttributes: [.font: badgeFont])
                 let bw = ceil(tsz.width) + 12
@@ -467,7 +614,7 @@ public final class RegionSelectorForm: NSPanel {
                 UiTheme.fillRoundedRect(
                     badgeRect,
                     radius: 3,
-                    color: NSColor(srgbRed: 36 / 255.0, green: 36 / 255.0, blue: 36 / 255.0, alpha: 220 / 255.0)
+                    color: NSColor(srgbRed: 36 / 255.0, green: 36 / 255.0, blue: 36 / 255.0, alpha: 225 / 255.0)
                 )
                 UiTheme.drawCenteredText(sizeText, in: badgeRect, font: badgeFont, color: .white)
             }
@@ -478,6 +625,120 @@ public final class RegionSelectorForm: NSPanel {
                     drawWeChatSubBar(owner: owner)
                 }
             }
+
+            // Draw Retina Pixel Magnifier Loupe when hovering or actively dragging/resizing
+            if !owner.hasSelection || owner.isSelecting || (owner.activeDragZone != .none && owner.activeDragZone != .interior) {
+                drawMagnifierLoupe(owner: owner)
+            }
+        }
+
+        private func drawMagnifierLoupe(owner: RegionSelectorForm) {
+            let mp = owner.mousePos
+            let loupeW: CGFloat = 118
+            let loupeH: CGFloat = 142
+            let offset: CGFloat = 20
+
+            var lx = mp.x + offset
+            var ly = mp.y + offset
+            if lx + loupeW > bounds.width - 8 { lx = mp.x - loupeW - offset }
+            if ly + loupeH > bounds.height - 8 { ly = mp.y - loupeH - offset }
+            lx = max(8, min(bounds.width - loupeW - 8, lx))
+            ly = max(8, min(bounds.height - loupeH - 8, ly))
+
+            let loupeRect = NSRect(x: lx, y: ly, width: loupeW, height: loupeH)
+            UiTheme.fillRoundedRect(loupeRect, radius: 6, color: UiTheme.toolbarBg)
+
+            let scopeH: CGFloat = 94
+            let scopeRect = NSRect(x: lx + 4, y: ly + 4, width: loupeW - 8, height: scopeH)
+
+            let centerPxX = max(0, min(owner.desktopSnapshot.width - 1, Int((mp.x * owner.backingScaleX).rounded())))
+            let centerPxY = max(0, min(owner.desktopSnapshot.height - 1, Int((mp.y * owner.backingScaleY).rounded())))
+
+            let gridCols = 15
+            let gridRows = 11
+            let halfC = gridCols / 2
+            let halfR = gridRows / 2
+            let cellW = scopeRect.width / CGFloat(gridCols)
+            let cellH = scopeRect.height / CGFloat(gridRows)
+
+            NSGraphicsContext.saveGraphicsState()
+            NSBezierPath(roundedRect: scopeRect, xRadius: 4, yRadius: 4).addClip()
+
+            for r in 0..<gridRows {
+                let sy = max(0, min(owner.desktopSnapshot.height - 1, centerPxY + (r - halfR)))
+                for c in 0..<gridCols {
+                    let sx = max(0, min(owner.desktopSnapshot.width - 1, centerPxX + (c - halfC)))
+                    let px = owner.desktopSnapshot.getPixel(x: sx, y: sy)
+                    NSColor(
+                        srgbRed: CGFloat(px.r) / 255.0,
+                        green: CGFloat(px.g) / 255.0,
+                        blue: CGFloat(px.b) / 255.0,
+                        alpha: 1.0
+                    ).setFill()
+                    let cellRect = NSRect(
+                        x: scopeRect.origin.x + CGFloat(c) * cellW,
+                        y: scopeRect.origin.y + CGFloat(r) * cellH,
+                        width: ceil(cellW),
+                        height: ceil(cellH)
+                    )
+                    cellRect.fill()
+                }
+            }
+
+            // Crosshair in the center of the loupe
+            let cx = scopeRect.origin.x + CGFloat(halfC) * cellW + cellW * 0.5
+            let cy = scopeRect.origin.y + CGFloat(halfR) * cellH + cellH * 0.5
+            UiTheme.weChatGreen.withAlphaComponent(0.85).setStroke()
+            let chPath = NSBezierPath()
+            chPath.lineWidth = 1.0
+            chPath.move(to: NSPoint(x: scopeRect.minX, y: cy))
+            chPath.line(to: NSPoint(x: scopeRect.maxX, y: cy))
+            chPath.move(to: NSPoint(x: cx, y: scopeRect.minY))
+            chPath.line(to: NSPoint(x: cx, y: scopeRect.maxY))
+            chPath.stroke()
+
+            NSGraphicsContext.restoreGraphicsState()
+            UiTheme.strokeRoundedRect(scopeRect, radius: 4, color: UiTheme.toolbarBorder, lineWidth: 1.0)
+
+            // Info footer inside loupe: size/coords + hex color
+            let centerRGB = owner.desktopSnapshot.getPixel(x: centerPxX, y: centerPxY)
+            let hexStr = String(format: "#%02X%02X%02X", centerRGB.r, centerRGB.g, centerRGB.b)
+            let coordStr: String
+            if owner.selectionRect.width > 0 && owner.selectionRect.height > 0 {
+                let sw = Int((owner.selectionRect.width * owner.backingScaleX).rounded())
+                let sh = Int((owner.selectionRect.height * owner.backingScaleY).rounded())
+                coordStr = "\(sw) × \(sh) px"
+            } else {
+                coordStr = "(\(centerPxX), \(centerPxY))"
+            }
+
+            let infoFont = UiTheme.fontPx(11)
+            UiTheme.drawCenteredText(
+                coordStr,
+                in: NSRect(x: lx + 6, y: ly + scopeH + 6, width: loupeW - 12, height: 18),
+                font: infoFont,
+                color: .white
+            )
+
+            let swatchRect = NSRect(x: lx + 20, y: ly + scopeH + 26, width: 11, height: 11)
+            let swatchColor = NSColor(
+                srgbRed: CGFloat(centerRGB.r) / 255.0,
+                green: CGFloat(centerRGB.g) / 255.0,
+                blue: CGFloat(centerRGB.b) / 255.0,
+                alpha: 1.0
+            )
+            UiTheme.fillRoundedRect(swatchRect, radius: 2, color: swatchColor)
+            UiTheme.strokeRoundedRect(swatchRect, radius: 2, color: .white, lineWidth: 0.8)
+
+            UiTheme.drawCenteredText(
+                hexStr,
+                in: NSRect(x: lx + 35, y: ly + scopeH + 22, width: loupeW - 41, height: 18),
+                font: infoFont,
+                color: UiTheme.textSecondary,
+                alignment: .left
+            )
+
+            UiTheme.strokeRoundedRect(loupeRect, radius: 6, color: UiTheme.toolbarBorder, lineWidth: 1.0)
         }
 
         private func drawSquareHandle(x: CGFloat, y: CGFloat) {
@@ -567,11 +828,13 @@ public final class RegionSelectorForm: NSPanel {
             if owner.btnRectTool.contains(mp) { tip = "矩形"; tipTarget = owner.btnRectTool }
             else if owner.btnArrowTool.contains(mp) { tip = "箭头"; tipTarget = owner.btnArrowTool }
             else if owner.btnPenTool.contains(mp) { tip = "画笔"; tipTarget = owner.btnPenTool }
-            else if owner.btnUndoTool.contains(mp) { tip = "撤销"; tipTarget = owner.btnUndoTool }
-            else if owner.btnPin.contains(mp) { tip = "贴图"; tipTarget = owner.btnPin }
-            else if owner.btnSave.contains(mp) { tip = "保存"; tipTarget = owner.btnSave }
-            else if owner.btnCancel.contains(mp) { tip = "退出"; tipTarget = owner.btnCancel }
-            else if owner.btnCopyFinish.contains(mp) { tip = "完成"; tipTarget = owner.btnCopyFinish }
+            else if owner.btnVerticalScroll.contains(mp) { tip = "纵向长截图 (V)"; tipTarget = owner.btnVerticalScroll }
+            else if owner.btnHorizontalScroll.contains(mp) { tip = "横向长截图 (H)"; tipTarget = owner.btnHorizontalScroll }
+            else if owner.btnUndoTool.contains(mp) { tip = "撤销 (⌘Z)"; tipTarget = owner.btnUndoTool }
+            else if owner.btnPin.contains(mp) { tip = "贴图 (P)"; tipTarget = owner.btnPin }
+            else if owner.btnSave.contains(mp) { tip = "保存 (⌘S)"; tipTarget = owner.btnSave }
+            else if owner.btnCancel.contains(mp) { tip = "退出 (Esc)"; tipTarget = owner.btnCancel }
+            else if owner.btnCopyFinish.contains(mp) { tip = "完成 (↩)"; tipTarget = owner.btnCopyFinish }
 
             if let tipText = tip {
                 let tipFont = UiTheme.fontPx(12)
@@ -684,22 +947,14 @@ public final class RegionSelectorForm: NSPanel {
         override func rightMouseDown(with event: NSEvent) {
             guard let owner = owner else { return }
             let pt = convert(event.locationInWindow, from: nil)
-            if owner.hasSelection {
-                owner.hasSelection = false
-                owner.selectionRect = .zero
-                owner.activeTool = .none
-                owner.annotations.removeAll()
-                owner.activeDragZone = .none
-                owner.hoverWindowRect = owner.findHoveredWindowRect(localPt: pt)
-                needsDisplay = true
-            } else {
-                owner.cancelSelection()
-            }
+            owner.mousePos = pt
+            owner.handleEscapeAction()
         }
 
         override func mouseDown(with event: NSEvent) {
             guard let owner = owner else { return }
             let pt = convert(event.locationInWindow, from: nil)
+            owner.mousePos = pt
 
             if event.clickCount == 2 && owner.hasSelection && owner.selectionRect.contains(pt) {
                 owner.finishNormalWithAction(.normalCopyCompleted)
@@ -724,18 +979,21 @@ public final class RegionSelectorForm: NSPanel {
                 if owner.btnRectTool.contains(pt) {
                     owner.activeTool = owner.activeTool == .rectangle ? .none : .rectangle
                     owner.updateToolbarLayout()
+                    owner.updateCursorForPoint(pt)
                     needsDisplay = true
                     return
                 }
                 if owner.btnArrowTool.contains(pt) {
                     owner.activeTool = owner.activeTool == .arrow ? .none : .arrow
                     owner.updateToolbarLayout()
+                    owner.updateCursorForPoint(pt)
                     needsDisplay = true
                     return
                 }
                 if owner.btnPenTool.contains(pt) {
                     owner.activeTool = owner.activeTool == .pen ? .none : .pen
                     owner.updateToolbarLayout()
+                    owner.updateCursorForPoint(pt)
                     needsDisplay = true
                     return
                 }
@@ -784,6 +1042,7 @@ public final class RegionSelectorForm: NSPanel {
                     owner.activeDragZone = hit
                     owner.dragStart = pt
                     owner.resizeInitialRect = owner.selectionRect
+                    owner.updateCursorForPoint(pt)
                     return
                 }
                 if owner.selectionRect.contains(pt) {
@@ -798,6 +1057,7 @@ public final class RegionSelectorForm: NSPanel {
             owner.activeDragZone = .none
             owner.dragStart = pt
             owner.selectionRect = NSRect(origin: pt, size: .zero)
+            owner.updateCursorForPoint(pt)
             needsDisplay = true
         }
 
@@ -808,6 +1068,7 @@ public final class RegionSelectorForm: NSPanel {
             if !owner.hasSelection && !owner.isSelecting {
                 owner.hoverWindowRect = owner.findHoveredWindowRect(localPt: pt)
             }
+            owner.updateCursorForPoint(pt)
             needsDisplay = true
         }
 
@@ -841,12 +1102,15 @@ public final class RegionSelectorForm: NSPanel {
             } else if owner.activeDragZone != .none {
                 owner.applyResizeOrMove(pt)
                 owner.updateToolbarLayout()
+                owner.updateCursorForPoint(pt)
                 needsDisplay = true
             }
         }
 
         override func mouseUp(with event: NSEvent) {
             guard let owner = owner else { return }
+            let pt = convert(event.locationInWindow, from: nil)
+            owner.mousePos = pt
 
             if let item = owner.currentDrawingItem {
                 owner.currentDrawingItem = nil
@@ -878,63 +1142,19 @@ public final class RegionSelectorForm: NSPanel {
                 } else {
                     owner.selectionRect = .zero
                 }
+                owner.updateCursorForPoint(pt)
                 needsDisplay = true
             } else if owner.activeDragZone != .none {
                 owner.activeDragZone = .none
                 owner.updateToolbarLayout()
+                owner.updateCursorForPoint(pt)
                 needsDisplay = true
             }
         }
 
         override func keyDown(with event: NSEvent) {
             guard let owner = owner else { return }
-            if event.keyCode == 53 { // Escape
-                if owner.hasSelection {
-                    owner.hasSelection = false
-                    owner.selectionRect = .zero
-                    owner.activeTool = .none
-                    owner.annotations.removeAll()
-                    owner.activeDragZone = .none
-                    needsDisplay = true
-                } else {
-                    owner.cancelSelection()
-                }
-                return
-            }
-
-            guard owner.hasSelection && owner.selectionRect.width >= 20 && owner.selectionRect.height >= 20 else { return }
-
-            let hasCmdOrCtrl = event.modifierFlags.contains(.command) || event.modifierFlags.contains(.control)
-            let ch = event.charactersIgnoringModifiers?.lowercased() ?? ""
-
-            if hasCmdOrCtrl && ch == "z" {
-                if !owner.annotations.isEmpty {
-                    _ = owner.annotations.popLast()
-                    needsDisplay = true
-                }
-            } else if event.keyCode == 36 || event.keyCode == 49 || (hasCmdOrCtrl && ch == "c") {
-                owner.finishNormalWithAction(.normalCopyCompleted)
-            } else if ch == "v" && !hasCmdOrCtrl {
-                owner.confirmScrollAction(.verticalScroll)
-            } else if ch == "h" && !hasCmdOrCtrl {
-                owner.confirmScrollAction(.horizontalScroll)
-            } else if ch == "p" && !hasCmdOrCtrl {
-                owner.finishNormalWithAction(.normalPinCompleted)
-            } else if hasCmdOrCtrl && ch == "s" {
-                owner.finishNormalWithAction(.normalSaveCompleted)
-            } else if owner.activeTool == .none && (event.keyCode == 123 || event.keyCode == 124 || event.keyCode == 125 || event.keyCode == 126) {
-                let dx: CGFloat = event.keyCode == 123 ? -1 : (event.keyCode == 124 ? 1 : 0)
-                let dy: CGFloat = event.keyCode == 126 ? -1 : (event.keyCode == 125 ? 1 : 0)
-                if event.modifierFlags.contains(.shift) {
-                    owner.selectionRect.size.width = max(24, min(bounds.width - owner.selectionRect.origin.x, owner.selectionRect.width + dx))
-                    owner.selectionRect.size.height = max(24, min(bounds.height - owner.selectionRect.origin.y, owner.selectionRect.height + dy))
-                } else {
-                    owner.selectionRect.origin.x = max(0, min(bounds.width - owner.selectionRect.width, owner.selectionRect.origin.x + dx))
-                    owner.selectionRect.origin.y = max(0, min(bounds.height - owner.selectionRect.height, owner.selectionRect.origin.y + dy))
-                }
-                owner.updateToolbarLayout()
-                needsDisplay = true
-            }
+            _ = owner.handleSelectorKeyDown(event)
         }
     }
 }

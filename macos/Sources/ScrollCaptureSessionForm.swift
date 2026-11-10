@@ -186,7 +186,16 @@ public final class ScrollCaptureSessionForm: NSPanel {
 
         override func mouseMoved(with event: NSEvent) {
             guard let owner = owner else { return }
-            owner.mousePos = convert(event.locationInWindow, from: nil)
+            let pt = convert(event.locationInWindow, from: nil)
+            owner.mousePos = pt
+            let clickable = owner.btnAutoToggleRect.contains(pt) ||
+                            owner.btnCancelRect.contains(pt) ||
+                            owner.btnFinishRect.contains(pt)
+            if clickable {
+                NSCursor.pointingHand.set()
+            } else {
+                NSCursor.arrow.set()
+            }
             needsDisplay = true
         }
 
@@ -442,9 +451,11 @@ public final class ScrollCaptureSessionForm: NSPanel {
     }
 
     private func updateLivePreview() {
-        let boxW = Int(previewCanvasRect.width) - 6
-        let boxH = Int(previewCanvasRect.height) - 6
+        let scale = max(1.0, self.backingScaleFactor)
+        let boxW = max(24, Int(((previewCanvasRect.width - 6) * scale).rounded()))
+        let boxH = max(24, Int(((previewCanvasRect.height - 6) * scale).rounded()))
         if let thumb = engine.renderPreviewThumbnail(boxW: boxW, boxH: boxH) {
+            thumb.scaleFactor = scale
             latestPreviewImage = thumb.toNSImage()
         }
     }
@@ -452,6 +463,7 @@ public final class ScrollCaptureSessionForm: NSPanel {
     fileprivate func completeWithAction(_ action: ScrollSessionExitAction) {
         guard !isCompleted else { return }
         isCompleted = true
+        NSCursor.arrow.set()
 
         captureTimer?.invalidate()
         captureTimer = nil

@@ -111,16 +111,18 @@ public final class PinWindowForm: NSPanel {
         self.pinnedNSImage = self.pinnedBitmap.toNSImage()
 
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let baseLogicalW = pinnedBitmap.logicalWidth
+        let baseLogicalH = pinnedBitmap.logicalHeight
         if initialTopDownLocation == nil &&
-            (CGFloat(pinnedBitmap.width) > screen.width * 0.7 || CGFloat(pinnedBitmap.height) > screen.height * 0.7) {
+            (baseLogicalW > screen.width * 0.7 || baseLogicalH > screen.height * 0.7) {
             scaleFactor = min(
-                (screen.width * 0.7) / CGFloat(pinnedBitmap.width),
-                (screen.height * 0.7) / CGFloat(pinnedBitmap.height)
+                (screen.width * 0.7) / max(1.0, baseLogicalW),
+                (screen.height * 0.7) / max(1.0, baseLogicalH)
             )
         }
 
-        let w = max(60.0, round(CGFloat(pinnedBitmap.width) * scaleFactor)) + 4.0
-        let h = max(40.0, round(CGFloat(pinnedBitmap.height) * scaleFactor)) + 4.0
+        let w = max(60.0, round(baseLogicalW * scaleFactor)) + 4.0
+        let h = max(40.0, round(baseLogicalH * scaleFactor)) + 4.0
 
         let frameRect: NSRect
         if let topLeft = initialTopDownLocation {
@@ -160,8 +162,8 @@ public final class PinWindowForm: NSPanel {
     }
 
     fileprivate func updateScaledSize() {
-        let w = max(60.0, round(CGFloat(pinnedBitmap.width) * scaleFactor)) + 4.0
-        let h = max(40.0, round(CGFloat(pinnedBitmap.height) * scaleFactor)) + 4.0
+        let w = max(60.0, round(pinnedBitmap.logicalWidth * scaleFactor)) + 4.0
+        let h = max(40.0, round(pinnedBitmap.logicalHeight * scaleFactor)) + 4.0
         let oldFrame = self.frame
         let newOrigin = NSPoint(x: oldFrame.origin.x, y: oldFrame.maxY - h)
         self.setFrame(NSRect(origin: newOrigin, size: NSSize(width: w, height: h)), display: true)

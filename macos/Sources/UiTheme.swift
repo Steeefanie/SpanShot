@@ -255,10 +255,17 @@ public enum UiTheme {
     }
 
     public static func copyBitmapToClipboard(_ bmp: RawBitmap) {
-        guard let png = bmp.pngData() else { return }
+        guard let cg = bmp.toCGImage() else { return }
+        let rep = NSBitmapImageRep(cgImage: cg)
+        rep.size = NSSize(width: bmp.logicalWidth, height: bmp.logicalHeight)
         let pb = NSPasteboard.general
         pb.clearContents()
-        pb.setData(png, forType: .png)
+        if let png = rep.representation(using: .png, properties: [:]) {
+            pb.setData(png, forType: .png)
+        }
+        if let tiff = rep.tiffRepresentation {
+            pb.setData(tiff, forType: .tiff)
+        }
     }
 
     public static func copyBitmapWithToast(_ bmp: RawBitmap) {

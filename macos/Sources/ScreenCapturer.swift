@@ -54,24 +54,38 @@ public enum ScreenCapturer {
         return CGPoint(x: loc.x, y: ph - loc.y)
     }
 
-    /// Captures a specific rectangle in top-down global screen coordinates.
+    /// Checks and requests macOS Screen Recording permission if not yet granted.
+    @discardableResult
+    public static func ensureScreenCapturePermission() -> Bool {
+        if CGPreflightScreenCaptureAccess() {
+            return true
+        }
+        return CGRequestScreenCaptureAccess()
+    }
+
+    /// Captures a specific rectangle in top-down global screen coordinates at full native Retina (.bestResolution) HiDPI quality.
     /// Windows with sharingType = .none are automatically excluded by the macOS WindowServer.
     public static func captureRegion(_ topDownRect: CGRect) -> RawBitmap {
         let rect = topDownRect.integral
-        let w = max(1, Int(rect.width))
-        let h = max(1, Int(rect.height))
+        let logicalW = max(1.0, rect.width)
+        let logicalH = max(1.0, rect.height)
 
-        if let cgImg = CGWindowListCreateImage(rect, .optionOnScreenOnly, kCGNullWindowID, [.nominalResolution]),
-           let bmp = RawBitmap(cgImage: cgImg) {
-            if bmp.width == w && bmp.height == h {
+        if let cgImg = CGWindowListCreateImage(rect, .optionOnScreenOnly, kCGNullWindowID, [.bestResolution]),
+           cgImg.width > 0 && cgImg.height > 0 {
+            let scaleX = CGFloat(cgImg.width) / logicalW
+            let scaleY = CGFloat(cgImg.height) / logicalH
+            let scale = max(1.0, (((scaleX + scaleY) * 0.5) * 100.0).rounded() / 100.0)
+            if let bmp = RawBitmap(cgImage: cgImg, scaleFactor: scale) {
                 return bmp
             }
-            let scaled = RawBitmap(width: w, height: h)
-            scaled.drawScaledFrom(src: bmp, srcX: 0, srcY: 0, srcW: bmp.width, srcH: bmp.height, dstX: 0, dstY: 0, dstW: w, dstH: h)
-            return scaled
         }
 
-        let fallback = RawBitmap(width: w, height: h)
+        let fallbackScale = NSScreen.main?.backingScaleFactor ?? 2.0
+        let fallback = RawBitmap(
+            width: max(1, Int((logicalW * fallbackScale).rounded())),
+            height: max(1, Int((logicalH * fallbackScale).rounded())),
+            scaleFactor: fallbackScale
+        )
         fallback.clear(r: 30, g: 30, b: 32)
         return fallback
     }

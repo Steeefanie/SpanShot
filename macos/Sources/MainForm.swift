@@ -2,27 +2,45 @@ import AppKit
 import Carbon
 import Foundation
 
-/// Minimalist dark main window + NSStatusItem menu bar agent (1:1 port of src/MainForm.cs).
+/// Minimalist dark main window + NSStatusItem menu bar agent (1:1 port of src/MainForm.cs, enhanced for macOS).
 public final class MainForm: NSWindow {
+    private static let prefKeyKeepAlive = "SpanShot.KeepInBackground"
+    private static let prefKeyQuickCopy = "SpanShot.QuickCopyOnly"
+    private static let prefKeyHotkeyCode = "SpanShot.HotkeyKeyCode"
+    private static let prefKeyHotkeyMods = "SpanShot.HotkeyCarbonMods"
+    private static let prefKeyHotkeyLabel = "SpanShot.HotkeyDisplay"
+
     fileprivate var statusItem: NSStatusItem?
+    fileprivate var menuCaptureItem: NSMenuItem?
+    fileprivate var menuQuickCopyItem: NSMenuItem?
+    fileprivate var menuKeepAliveItem: NSMenuItem?
+
     fileprivate var isCapturing = false
     fileprivate var keepInBackground = true
     fileprivate var quickCopyOnly = false
+
+    fileprivate var hotkeyKeyCode: UInt32 = UInt32(kVK_ANSI_A)
+    fileprivate var hotkeyCarbonMods: UInt32 = UInt32(cmdKey | shiftKey)
+    fileprivate var hotkeyDisplay: String = "⌘⇧A"
+    fileprivate var isRecordingHotkey = false
 
     fileprivate var draggingWindow = false
     fileprivate var dragStartScreenPt: NSPoint = .zero
     fileprivate var winStartOrigin: NSPoint = .zero
     fileprivate var mousePos: NSPoint = .zero
 
+    fileprivate let brandIconImage: NSImage
     fileprivate let headerRect = NSRect(x: 0, y: 0, width: 250, height: 44)
     fileprivate let btnCloseRect = NSRect(x: 296 - 36, y: 10, width: 26, height: 24)
     fileprivate let btnCaptureRect = NSRect(x: 16, y: 48, width: 296 - 32, height: 46)
+    fileprivate let btnHotkeyBadgeRect = NSRect(x: 16 + (296 - 32) - 82, y: 48 + (46 - 26) / 2, width: 70, height: 26)
     fileprivate let chkKeepAliveRect = NSRect(x: 16, y: 106, width: 296 - 32, height: 26)
     fileprivate let chkQuickCopyRect = NSRect(x: 16, y: 138, width: 296 - 32, height: 44)
 
     private var activeSelector: RegionSelectorForm?
     private var activeScrollSession: ScrollCaptureSessionForm?
-    private var hotKeyRef: EventHotKeyRef?
+    private var hotKeyRefs: [EventHotKeyRef?] = []
+    private var eventHandlerinstalled = false
 
     private final class MainPanelView: NSView {
         weak var owner: MainForm?
@@ -51,10 +69,22 @@ public final class MainForm: NSWindow {
             UiTheme.fillRoundedRect(outer, radius: 10, color: UiTheme.bgDark)
             UiTheme.strokeRoundedRect(outer, radius: 10, color: UiTheme.borderSubtle, lineWidth: 1.0)
 
+            // Brand icon + Title in header
+            let iconRect = NSRect(x: 14, y: 11, width: 22, height: 22)
+            NSGraphicsContext.current?.imageInterpolation = .high
+            owner.brandIconImage.draw(
+                in: iconRect,
+                from: .zero,
+                operation: .sourceOver,
+                fraction: 1.0,
+                respectFlipped: true,
+                hints: nil
+            )
+
             let brandFont = UiTheme.fontPx(15, bold: true)
             UiTheme.drawCenteredText(
                 "SpanShot",
-                in: NSRect(x: 16, y: 6, width: 160, height: 32),
+                in: NSRect(x: 41, y: 6, width: 160, height: 32),
                 font: brandFont,
                 color: .white,
                 alignment: .left
@@ -71,11 +101,16 @@ public final class MainForm: NSWindow {
                 textColor: closeHovered ? .white : UiTheme.textSecondary
             )
 
+            let badgeHovered = owner.btnHotkeyBadgeRect.contains(owner.mousePos)
+            let btnHovered = owner.btnCaptureRect.contains(owner.mousePos) && !badgeHovered
             drawCaptureButton(
                 rect: owner.btnCaptureRect,
+                badgeRect: owner.btnHotkeyBadgeRect,
                 label: "开始截图",
-                hotkey: "Alt + A",
-                hovered: owner.btnCaptureRect.contains(owner.mousePos)
+                hotkey: owner.isRecordingHotkey ? "请按键..." : owner.hotkeyDisplay,
+                btnHovered: btnHovered,
+                badgeHovered: badgeHovered,
+                recording: owner.isRecordingHotkey
             )
 
             drawCheckboxOption(
@@ -95,16 +130,45 @@ public final class MainForm: NSWindow {
             )
         }
 
-        private func drawCaptureButton(rect: NSRect, label: String, hotkey: String, hovered: Bool) {
-            let bg = hovered ? UiTheme.lighten(UiTheme.weChatGreen, delta: 14) : UiTheme.weChatGreen
+        private func drawCaptureButton(
+            rect: NSRect,
+            badgeRect: NSRect,
+            label: String,
+            hotkey: String,
+            btnHovered: Bool,
+            badgeHovered: Bool,
+            recording: Bool
+        ) {
+            let bg = btnHovered ? UiTheme.lighten(UiTheme.weChatGreen, delta: 14) : UiTheme.weChatGreen
             UiTheme.fillRoundedRect(rect, radius: 8, color: bg)
 
-            let textRect = NSRect(x: rect.minX + 18, y: rect.minY, width: rect.width - 100, height: rect.height)
+            let textRect = NSRect(x: rect.minX + 18, y: rect.minY, width: rect.width - 104, height: rect.height)
             UiTheme.drawCenteredText(label, in: textRect, font: UiTheme.fontPx(15, bold: true), color: .white, alignment: .left)
 
-            let hkRect = NSRect(x: rect.maxX - 76, y: rect.minY + (rect.height - 24) / 2, width: 60, height: 24)
-            UiTheme.fillRoundedRect(hkRect, radius: 5, color: NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 45 / 255.0))
-            UiTheme.drawCenteredText(hotkey, in: hkRect, font: UiTheme.fontPx(12), color: .white, alignment: .center)
+            let badgeBg: NSColor
+            if recording {
+                badgeBg = UiTheme.accentOrange
+            } else if badgeHovered {
+                badgeBg = NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 95 / 255.0)
+            } else {
+                badgeBg = NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 52 / 255.0)
+            }
+            UiTheme.fillRoundedRect(badgeRect, radius: 5, color: badgeBg)
+            if recording || badgeHovered {
+                UiTheme.strokeRoundedRect(
+                    badgeRect,
+                    radius: 5,
+                    color: recording ? .white : NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.45),
+                    lineWidth: 1.0
+                )
+            }
+            UiTheme.drawCenteredText(
+                hotkey,
+                in: badgeRect,
+                font: UiTheme.fontPx(recording ? 11 : 12, bold: recording),
+                color: recording ? .black : .white,
+                alignment: .center
+            )
         }
 
         private func drawCheckboxOption(rect: NSRect, label: String, subNote: String?, isChecked: Bool, hovered: Bool) {
@@ -148,13 +212,42 @@ public final class MainForm: NSWindow {
 
         override func mouseMoved(with event: NSEvent) {
             guard let owner = owner else { return }
-            owner.mousePos = convert(event.locationInWindow, from: nil)
+            let pt = convert(event.locationInWindow, from: nil)
+            owner.mousePos = pt
+            let clickable = owner.btnCloseRect.contains(pt) ||
+                            owner.btnCaptureRect.contains(pt) ||
+                            owner.chkKeepAliveRect.contains(pt) ||
+                            owner.chkQuickCopyRect.contains(pt)
+            if clickable {
+                NSCursor.pointingHand.set()
+            } else {
+                NSCursor.arrow.set()
+            }
+            needsDisplay = true
+        }
+
+        override func mouseExited(with event: NSEvent) {
+            guard let owner = owner else { return }
+            owner.mousePos = NSPoint(x: -100, y: -100)
+            NSCursor.arrow.set()
             needsDisplay = true
         }
 
         override func mouseDown(with event: NSEvent) {
             guard let owner = owner else { return }
             let pt = convert(event.locationInWindow, from: nil)
+
+            if owner.btnHotkeyBadgeRect.contains(pt) {
+                owner.isRecordingHotkey.toggle()
+                window?.makeFirstResponder(self)
+                needsDisplay = true
+                return
+            }
+
+            if owner.isRecordingHotkey {
+                owner.isRecordingHotkey = false
+                needsDisplay = true
+            }
 
             if owner.btnCloseRect.contains(pt) {
                 if owner.keepInBackground {
@@ -171,16 +264,16 @@ public final class MainForm: NSWindow {
                 return
             }
             if owner.btnCaptureRect.contains(pt) {
-                owner.startCaptureFlow()
+                owner.startCaptureFlow(preset: .none)
                 return
             }
             if owner.chkKeepAliveRect.contains(pt) {
-                owner.keepInBackground.toggle()
+                owner.setKeepInBackground(!owner.keepInBackground)
                 needsDisplay = true
                 return
             }
             if owner.chkQuickCopyRect.contains(pt) {
-                owner.quickCopyOnly.toggle()
+                owner.setQuickCopyOnly(!owner.quickCopyOnly)
                 needsDisplay = true
                 return
             }
@@ -197,9 +290,45 @@ public final class MainForm: NSWindow {
         override func mouseUp(with event: NSEvent) {
             owner?.draggingWindow = false
         }
+
+        override func keyDown(with event: NSEvent) {
+            guard let owner = owner else { return }
+            if owner.isRecordingHotkey {
+                if event.keyCode == 53 { // Esc cancels recording
+                    owner.isRecordingHotkey = false
+                    needsDisplay = true
+                    return
+                }
+                if owner.recordNewHotkey(from: event) {
+                    owner.isRecordingHotkey = false
+                    needsDisplay = true
+                }
+                return
+            }
+            if event.keyCode == 36 || event.keyCode == 76 { // Return / Enter starts capture
+                owner.startCaptureFlow(preset: .none)
+            } else {
+                super.keyDown(with: event)
+            }
+        }
     }
 
     public init() {
+        self.brandIconImage = AppIconRenderer.renderAppIconImage(pointSize: 22)
+
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: Self.prefKeyKeepAlive) != nil {
+            self.keepInBackground = defaults.bool(forKey: Self.prefKeyKeepAlive)
+        }
+        if defaults.object(forKey: Self.prefKeyQuickCopy) != nil {
+            self.quickCopyOnly = defaults.bool(forKey: Self.prefKeyQuickCopy)
+        }
+        if let savedLabel = defaults.string(forKey: Self.prefKeyHotkeyLabel), !savedLabel.isEmpty {
+            self.hotkeyKeyCode = UInt32(defaults.integer(forKey: Self.prefKeyHotkeyCode))
+            self.hotkeyCarbonMods = UInt32(defaults.integer(forKey: Self.prefKeyHotkeyMods))
+            self.hotkeyDisplay = savedLabel
+        }
+
         let w: CGFloat = 296
         let h: CGFloat = 198
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
@@ -221,6 +350,7 @@ public final class MainForm: NSWindow {
         self.backgroundColor = .clear
         self.hasShadow = true
         self.isReleasedWhenClosed = false
+        self.acceptsMouseMovedEvents = true
         self.title = "SpanShot"
 
         let view = MainPanelView(frame: NSRect(x: 0, y: 0, width: w, height: h))
@@ -228,20 +358,62 @@ public final class MainForm: NSWindow {
         self.contentView = view
 
         setupStatusItem()
-        registerGlobalHotkey()
+        registerGlobalHotkeys()
     }
 
     override public var canBecomeKey: Bool { true }
     override public var canBecomeMain: Bool { true }
 
+    fileprivate func setKeepInBackground(_ val: Bool) {
+        keepInBackground = val
+        UserDefaults.standard.set(val, forKey: Self.prefKeyKeepAlive)
+        menuKeepAliveItem?.state = val ? .on : .off
+        contentView?.needsDisplay = true
+    }
+
+    fileprivate func setQuickCopyOnly(_ val: Bool) {
+        quickCopyOnly = val
+        UserDefaults.standard.set(val, forKey: Self.prefKeyQuickCopy)
+        menuQuickCopyItem?.state = val ? .on : .off
+        contentView?.needsDisplay = true
+    }
+
     private func setupStatusItem() {
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.title = "SpanShot"
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        if let btn = item.button {
+            btn.image = AppIconRenderer.renderStatusBarTemplateIcon()
+            btn.imagePosition = .imageOnly
+            btn.toolTip = "SpanShot — 跨屏横纵长截图 (\(hotkeyDisplay))"
+        }
 
         let menu = NSMenu()
-        let captureItem = NSMenuItem(title: "截图 (Alt+A)", action: #selector(onMenuCapture), keyEquivalent: "")
+
+        let captureItem = NSMenuItem(title: "开始截图 (\(hotkeyDisplay))", action: #selector(onMenuCapture), keyEquivalent: "")
         captureItem.target = self
         menu.addItem(captureItem)
+        self.menuCaptureItem = captureItem
+
+        let vScrollItem = NSMenuItem(title: "纵向长截图...", action: #selector(onMenuVerticalScroll), keyEquivalent: "")
+        vScrollItem.target = self
+        menu.addItem(vScrollItem)
+
+        let hScrollItem = NSMenuItem(title: "横向长截图...", action: #selector(onMenuHorizontalScroll), keyEquivalent: "")
+        hScrollItem.target = self
+        menu.addItem(hScrollItem)
+
+        menu.addItem(.separator())
+
+        let quickItem = NSMenuItem(title: "快捷截图（只复制不弹窗）", action: #selector(onMenuToggleQuickCopy), keyEquivalent: "")
+        quickItem.target = self
+        quickItem.state = quickCopyOnly ? .on : .off
+        menu.addItem(quickItem)
+        self.menuQuickCopyItem = quickItem
+
+        let keepItem = NSMenuItem(title: "常驻后台", action: #selector(onMenuToggleKeepAlive), keyEquivalent: "")
+        keepItem.target = self
+        keepItem.state = keepInBackground ? .on : .off
+        menu.addItem(keepItem)
+        self.menuKeepAliveItem = keepItem
 
         menu.addItem(.separator())
 
@@ -249,7 +421,7 @@ public final class MainForm: NSWindow {
         showItem.target = self
         menu.addItem(showItem)
 
-        let quitItem = NSMenuItem(title: "彻底退出", action: #selector(onMenuQuit), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: "彻底退出 SpanShot", action: #selector(onMenuQuit), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
 
@@ -257,40 +429,140 @@ public final class MainForm: NSWindow {
         self.statusItem = item
     }
 
-    private func registerGlobalHotkey() {
-        // Register Option+A (Alt+A, keyCode 0 = 'A', optionKey = 2048) via Carbon EventHotKey
-        var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
+    private func registerGlobalHotkeys() {
+        for ref in hotKeyRefs {
+            if let r = ref {
+                UnregisterEventHotKey(r)
+            }
+        }
+        hotKeyRefs.removeAll()
 
-        InstallEventHandler(
-            GetApplicationEventTarget(),
-            { (_, _, userData) -> OSStatus in
-                guard let userData = userData else { return noErr }
-                let mainForm = Unmanaged<MainForm>.fromOpaque(userData).takeUnretainedValue()
-                DispatchQueue.main.async {
-                    mainForm.startCaptureFlow()
-                }
-                return noErr
-            },
-            1,
-            &eventType,
-            selfPtr,
-            nil
-        )
+        if !eventHandlerinstalled {
+            var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+            let selfPtr = Unmanaged.passUnretained(self).toOpaque()
 
-        let hotKeyID = EventHotKeyID(signature: OSType(0x53505348), id: 9001) // 'SPSH'
-        RegisterEventHotKey(
-            UInt32(kVK_ANSI_A),
-            UInt32(optionKey),
-            hotKeyID,
-            GetApplicationEventTarget(),
-            0,
-            &hotKeyRef
-        )
+            InstallEventHandler(
+                GetApplicationEventTarget(),
+                { (_, _, userData) -> OSStatus in
+                    guard let userData = userData else { return noErr }
+                    let mainForm = Unmanaged<MainForm>.fromOpaque(userData).takeUnretainedValue()
+                    DispatchQueue.main.async {
+                        mainForm.startCaptureFlow(preset: .none)
+                    }
+                    return noErr
+                },
+                1,
+                &eventType,
+                selfPtr,
+                nil
+            )
+            eventHandlerinstalled = true
+        }
+
+        // 1. Register user's primary hotkey (default: ⌘⇧A)
+        registerSingleCarbonHotkey(id: 9001, keyCode: hotkeyKeyCode, carbonMods: hotkeyCarbonMods)
+
+        // 2. Also register ⌃⌘A (WeChat Mac habit) and ⌥A (Alt+A habit) as secondary triggers if distinct
+        let ctrlCmdMods = UInt32(controlKey | cmdKey)
+        if !(hotkeyKeyCode == UInt32(kVK_ANSI_A) && hotkeyCarbonMods == ctrlCmdMods) {
+            registerSingleCarbonHotkey(id: 9002, keyCode: UInt32(kVK_ANSI_A), carbonMods: ctrlCmdMods)
+        }
+
+        let optMods = UInt32(optionKey)
+        if !(hotkeyKeyCode == UInt32(kVK_ANSI_A) && hotkeyCarbonMods == optMods) {
+            registerSingleCarbonHotkey(id: 9003, keyCode: UInt32(kVK_ANSI_A), carbonMods: optMods)
+        }
     }
 
-    @objc private func onMenuCapture() {
-        startCaptureFlow()
+    private func registerSingleCarbonHotkey(id: UInt32, keyCode: UInt32, carbonMods: UInt32) {
+        var ref: EventHotKeyRef?
+        let hkID = EventHotKeyID(signature: OSType(0x53505348), id: id)
+        let status = RegisterEventHotKey(
+            keyCode,
+            carbonMods,
+            hkID,
+            GetApplicationEventTarget(),
+            0,
+            &ref
+        )
+        if status == noErr {
+            hotKeyRefs.append(ref)
+        }
+    }
+
+    fileprivate func recordNewHotkey(from event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        var cMods: UInt32 = 0
+        var modSymbols = ""
+
+        if flags.contains(.control) {
+            cMods |= UInt32(controlKey)
+            modSymbols += "⌃"
+        }
+        if flags.contains(.option) {
+            cMods |= UInt32(optionKey)
+            modSymbols += "⌥"
+        }
+        if flags.contains(.shift) {
+            cMods |= UInt32(shiftKey)
+            modSymbols += "⇧"
+        }
+        if flags.contains(.command) {
+            cMods |= UInt32(cmdKey)
+            modSymbols += "⌘"
+        }
+
+        // Require at least one modifier key (or F1..F12)
+        guard cMods != 0, let keyName = Self.keyCodeToDisplayString(event.keyCode) else {
+            return false
+        }
+
+        self.hotkeyKeyCode = UInt32(event.keyCode)
+        self.hotkeyCarbonMods = cMods
+        self.hotkeyDisplay = modSymbols + keyName
+
+        let defaults = UserDefaults.standard
+        defaults.set(Int(self.hotkeyKeyCode), forKey: Self.prefKeyHotkeyCode)
+        defaults.set(Int(self.hotkeyCarbonMods), forKey: Self.prefKeyHotkeyMods)
+        defaults.set(self.hotkeyDisplay, forKey: Self.prefKeyHotkeyLabel)
+
+        registerGlobalHotkeys()
+        menuCaptureItem?.title = "开始截图 (\(hotkeyDisplay))"
+        statusItem?.button?.toolTip = "SpanShot — 跨屏横纵长截图 (\(hotkeyDisplay))"
+        ToastWindow.showToast(message: "快捷键已设为 \(hotkeyDisplay)", accent: UiTheme.weChatGreen)
+        return true
+    }
+
+    private static func keyCodeToDisplayString(_ keyCode: UInt16) -> String? {
+        let map: [UInt16: String] = [
+            0: "A", 1: "S", 2: "D", 3: "F", 4: "H", 5: "G", 6: "Z", 7: "X", 8: "C", 9: "V",
+            11: "B", 12: "Q", 13: "W", 14: "E", 15: "R", 16: "Y", 17: "T", 18: "1", 19: "2",
+            20: "3", 21: "4", 22: "6", 23: "5", 24: "=", 25: "9", 26: "7", 27: "-", 28: "8",
+            29: "0", 31: "O", 32: "U", 34: "I", 35: "P", 37: "L", 38: "J", 40: "K", 45: "N",
+            46: "M", 122: "F1", 120: "F2", 99: "F3", 118: "F4", 96: "F5", 97: "F6", 98: "F7",
+            100: "F8", 101: "F9", 109: "F10", 103: "F11", 111: "F12"
+        ]
+        return map[keyCode]
+    }
+
+    @objc public func onMenuCapture() {
+        startCaptureFlow(preset: .none)
+    }
+
+    @objc public func onMenuVerticalScroll() {
+        startCaptureFlow(preset: .verticalScroll)
+    }
+
+    @objc public func onMenuHorizontalScroll() {
+        startCaptureFlow(preset: .horizontalScroll)
+    }
+
+    @objc private func onMenuToggleQuickCopy() {
+        setQuickCopyOnly(!quickCopyOnly)
+    }
+
+    @objc private func onMenuToggleKeepAlive() {
+        setKeepInBackground(!keepInBackground)
     }
 
     @objc public func onMenuShowMain() {
@@ -298,27 +570,29 @@ public final class MainForm: NSWindow {
         self.makeKeyAndOrderFront(nil)
     }
 
-    @objc private func onMenuQuit() {
+    @objc public func onMenuQuit() {
         NSApp.terminate(nil)
     }
 
-    public func startCaptureFlow() {
+    public func startCaptureFlow(preset: CaptureActionMode = .none) {
         guard !isCapturing else { return }
+        _ = ScreenCapturer.ensureScreenCapturePermission()
         isCapturing = true
+        isRecordingHotkey = false
 
         let wasVisible = self.isVisible
         if wasVisible {
             self.orderOut(nil)
         }
 
-        let delay: TimeInterval = wasVisible ? 0.12 : 0.02
+        let delay: TimeInterval = wasVisible ? 0.10 : 0.02
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-            self?.presentRegionSelector(wasMainVisible: wasVisible)
+            self?.presentRegionSelector(wasMainVisible: wasVisible, preset: preset)
         }
     }
 
-    private func presentRegionSelector(wasMainVisible: Bool) {
-        let selector = RegionSelectorForm(presetMode: .none)
+    private func presentRegionSelector(wasMainVisible: Bool, preset: CaptureActionMode) {
+        let selector = RegionSelectorForm(presetMode: preset)
         self.activeSelector = selector
 
         selector.beginSelection { [weak self] sel in

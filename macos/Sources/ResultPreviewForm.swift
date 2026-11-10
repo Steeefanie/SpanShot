@@ -96,7 +96,7 @@ public final class ResultPreviewForm: NSWindow, NSWindowDelegate {
         scrollView.backgroundColor = NSColor(srgbRed: 20 / 255.0, green: 20 / 255.0, blue: 22 / 255.0, alpha: 1.0)
         scrollView.drawsBackground = true
 
-        canvasView = CanvasImageView(frame: NSRect(x: 0, y: 0, width: workingBitmap.width, height: workingBitmap.height))
+        canvasView = CanvasImageView(frame: NSRect(x: 0, y: 0, width: workingBitmap.logicalWidth, height: workingBitmap.logicalHeight))
         canvasView.owner = self
         scrollView.documentView = canvasView
 
@@ -142,8 +142,8 @@ public final class ResultPreviewForm: NSWindow, NSWindowDelegate {
             canvasView.frame = NSRect(
                 x: 0,
                 y: 0,
-                width: CGFloat(workingBitmap.width),
-                height: CGFloat(workingBitmap.height)
+                width: workingBitmap.logicalWidth,
+                height: workingBitmap.logicalHeight
             )
         }
         canvasView.needsDisplay = true
@@ -296,6 +296,12 @@ public final class ResultPreviewForm: NSWindow, NSWindowDelegate {
 
         override func mouseMoved(with event: NSEvent) {
             mousePos = convert(event.locationInWindow, from: nil)
+            let hit = buildButtons().contains { $0.rect.contains(mousePos) }
+            if hit {
+                NSCursor.pointingHand.set()
+            } else {
+                NSCursor.arrow.set()
+            }
             needsDisplay = true
         }
 
@@ -333,36 +339,32 @@ public final class ResultPreviewForm: NSWindow, NSWindowDelegate {
 
         private func imageDrawRect() -> NSRect {
             guard let owner = owner else { return bounds }
+            let logicalW = owner.workingBitmap.logicalWidth
+            let logicalH = owner.workingBitmap.logicalHeight
             if !owner.fitToWindow || bounds.width <= 0 || bounds.height <= 0 {
-                return NSRect(x: 0, y: 0, width: CGFloat(owner.workingBitmap.width), height: CGFloat(owner.workingBitmap.height))
+                return NSRect(x: 0, y: 0, width: logicalW, height: logicalH)
             }
-            let imgW = CGFloat(owner.workingBitmap.width)
-            let imgH = CGFloat(owner.workingBitmap.height)
-            let imgAspect = imgW / max(1, imgH)
+            let imgAspect = logicalW / max(1, logicalH)
             let boxAspect = bounds.width / max(1, bounds.height)
 
             if imgAspect > boxAspect {
-                let scale = bounds.width / imgW
-                let rh = imgH * scale
+                let scale = bounds.width / max(1, logicalW)
+                let rh = logicalH * scale
                 return NSRect(x: 0, y: (bounds.height - rh) / 2.0, width: bounds.width, height: rh)
             } else {
-                let scale = bounds.height / imgH
-                let rw = imgW * scale
+                let scale = bounds.height / max(1, logicalH)
+                let rw = logicalW * scale
                 return NSRect(x: (bounds.width - rw) / 2.0, y: 0, width: rw, height: bounds.height)
             }
         }
 
         private func controlToImagePoint(_ pt: NSPoint) -> NSPoint {
             guard let owner = owner else { return pt }
-            if !owner.fitToWindow {
-                let x = max(0, min(CGFloat(owner.workingBitmap.width), pt.x))
-                let y = max(0, min(CGFloat(owner.workingBitmap.height), pt.y))
-                return NSPoint(x: round(x), y: round(y))
-            }
             let drawRect = imageDrawRect()
-            let scale = drawRect.width / max(1, CGFloat(owner.workingBitmap.width))
-            let ix = round((pt.x - drawRect.origin.x) / max(0.001, scale))
-            let iy = round((pt.y - drawRect.origin.y) / max(0.001, scale))
+            let scaleX = CGFloat(owner.workingBitmap.width) / max(1.0, drawRect.width)
+            let scaleY = CGFloat(owner.workingBitmap.height) / max(1.0, drawRect.height)
+            let ix = round((pt.x - drawRect.origin.x) * scaleX)
+            let iy = round((pt.y - drawRect.origin.y) * scaleY)
             return NSPoint(
                 x: max(0, min(CGFloat(owner.workingBitmap.width), ix)),
                 y: max(0, min(CGFloat(owner.workingBitmap.height), iy))
@@ -511,10 +513,11 @@ public final class ResultPreviewForm: NSWindow, NSWindowDelegate {
                 if penPoints.count >= 2 {
                     owner.pushHistory()
                     let imgPts = penPoints.map { controlToImagePoint($0) }
+                    let strokeW = 3.0 * owner.workingBitmap.scaleFactor
                     commitAnnotationToBitmap(owner: owner) {
                         UiTheme.annotColors[0].setStroke()
                         let path = NSBezierPath()
-                        path.lineWidth = 3.0
+                        path.lineWidth = strokeW
                         path.lineCapStyle = .round
                         path.lineJoinStyle = .round
                         path.move(to: imgPts[0])
@@ -556,15 +559,16 @@ public final class ResultPreviewForm: NSWindow, NSWindowDelegate {
             } else if box.width >= 4 || box.height >= 4 {
                 owner.pushHistory()
                 let tool = owner.currentTool
+                let strokeW = 3.0 * owner.workingBitmap.scaleFactor
                 commitAnnotationToBitmap(owner: owner) {
                     let color = UiTheme.annotColors[0]
                     if tool == .rectangle {
                         color.setStroke()
                         let path = NSBezierPath(rect: box)
-                        path.lineWidth = 3.0
+                        path.lineWidth = strokeW
                         path.stroke()
                     } else if tool == .arrow {
-                        Self.drawArrowPath(from: imgStart, to: imgEnd, color: color, lineWidth: 3.0)
+                        Self.drawArrowPath(from: imgStart, to: imgEnd, color: color, lineWidth: strokeW)
                     }
                 }
             }
