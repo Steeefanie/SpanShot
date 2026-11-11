@@ -21,6 +21,11 @@ namespace SpanShot
         private Bitmap _workingBitmap;
         private readonly Stack<Bitmap> _history = new Stack<Bitmap>();
         private readonly string _captureTypeTag;
+        private readonly string _initialSaveDir;
+
+        public Bitmap WorkingBitmap { get { return _workingBitmap; } }
+        public bool ManuallySaved { get; private set; }
+        public bool ConfirmedCopy { get; private set; }
 
         private Panel _scrollPanel;
         private PictureBox _picBox;
@@ -42,11 +47,12 @@ namespace SpanShot
         private Point _panStartScrollPos;
         private readonly List<Point> _penControlPoints = new List<Point>();
 
-        public ResultPreviewForm(Bitmap bitmap, string captureTypeTag)
+        public ResultPreviewForm(Bitmap bitmap, string captureTypeTag, string initialSaveDir = null)
         {
             if (bitmap == null) throw new ArgumentNullException("bitmap");
             _workingBitmap = (Bitmap)bitmap.Clone();
             _captureTypeTag = captureTypeTag;
+            _initialSaveDir = initialSaveDir;
 
             bool isLongOrWide = (_workingBitmap.Height > _workingBitmap.Width * 1.8) ||
                                 (_workingBitmap.Width > _workingBitmap.Height * 1.8);
@@ -61,6 +67,7 @@ namespace SpanShot
         private void InitializeComponent()
         {
             UpdateWindowTitle();
+            Icon = AppIcon.GetWindowIcon();
             Size = new Size(UiTheme.S(960), UiTheme.S(680));
             StartPosition = FormStartPosition.CenterScreen;
             BackColor = UiTheme.BgDark;
@@ -127,7 +134,7 @@ namespace SpanShot
             btnCopyClose.Click += (s, e) =>
             {
                 CopyToClipboardSafe();
-                ToastForm.ShowToast("已复制到剪贴板", UiTheme.WeChatGreen);
+                ConfirmedCopy = true;
                 Close();
             };
 
@@ -504,6 +511,10 @@ namespace SpanShot
             {
                 sfd.Filter = "PNG 图像 (*.png)|*.png|JPEG 图像 (*.jpg)|*.jpg";
                 sfd.DefaultExt = "png";
+                if (!string.IsNullOrEmpty(_initialSaveDir) && System.IO.Directory.Exists(_initialSaveDir))
+                {
+                    sfd.InitialDirectory = _initialSaveDir;
+                }
                 sfd.FileName = string.Format("SpanShot_{0}_{1:yyyyMMdd_HHmmss}.png", _captureTypeTag, DateTime.Now);
 
                 if (sfd.ShowDialog(this) == DialogResult.OK)
@@ -511,6 +522,7 @@ namespace SpanShot
                     ImageFormat fmt = sfd.FileName.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase)
                         ? ImageFormat.Jpeg : ImageFormat.Png;
                     _workingBitmap.Save(sfd.FileName, fmt);
+                    ManuallySaved = true;
                     ToastForm.ShowToast("已保存", UiTheme.WeChatGreen);
                 }
             }
@@ -520,7 +532,7 @@ namespace SpanShot
         {
             base.OnKeyDown(e);
             if (e.KeyCode == Keys.Escape) Close();
-            else if (e.KeyCode == Keys.Enter) { CopyToClipboardSafe(); Close(); }
+            else if (e.KeyCode == Keys.Enter) { CopyToClipboardSafe(); ConfirmedCopy = true; Close(); }
             else if (e.Control && e.KeyCode == Keys.C) CopyToClipboardSafe();
             else if (e.Control && e.KeyCode == Keys.S) SaveToFile();
             else if (e.Control && e.KeyCode == Keys.Z) PerformUndo();

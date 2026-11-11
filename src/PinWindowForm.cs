@@ -20,6 +20,7 @@ namespace SpanShot
         {
             _pinnedBitmap = (Bitmap)sourceBitmap.Clone();
 
+            Icon = AppIcon.GetWindowIcon();
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = initialLocation.HasValue ? FormStartPosition.Manual : FormStartPosition.CenterScreen;
             if (initialLocation.HasValue)
