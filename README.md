@@ -8,9 +8,9 @@
 
 请直接前往 [**GitHub Releases 页面**](https://github.com/Steeefanie/SpanShot/releases/latest) 下载对应系统的安装包：
 
-- **Windows 版**：下载 **`SpanShot.exe`**（单文件绿色免安装，~148 KB，内置多尺寸高清图标，双击即用）
-- **macOS 版（Apple Silicon 芯片 M1/M2/M3/M4 推荐）**：下载 **`SpanShot_AppleSilicon.dmg`**（拖入 Applications 即可使用）
-- **macOS 版（Universal 通用版，支持 Apple Silicon + Intel）**：下载 **`SpanShot.dmg`**（拖入 Applications 即可使用）
+- **Windows 版**：下载 **`SpanShot_<版本号>_Windows.exe`**（单文件绿色免安装，~148 KB，内置多尺寸高清图标，双击即用）
+- **macOS 版（Apple Silicon 芯片 M1/M2/M3/M4 推荐）**：下载 **`SpanShot_<版本号>_macOS_AppleSilicon.dmg`**（拖入 Applications 即可使用）
+- **macOS 版（Universal 通用版，支持 Apple Silicon + Intel）**：下载 **`SpanShot_<版本号>_macOS_Universal.dmg`**（拖入 Applications 即可使用）
 
 ---
 

@@ -19,22 +19,29 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build SpanShot.exe & Run Self-Test
+      - name: Build Versioned Windows EXE & Run Self-Test
         shell: pwsh
+        env:
+          TAG_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}
         run: |
           ./build.ps1
           ./SpanShot.exe --self-test | Out-Host
+          $ver = if ($env:TAG_NAME.StartsWith("v")) { $env:TAG_NAME } else { "v$($env:TAG_NAME)" }
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item -Force ./SpanShot.exe "dist/SpanShot_${ver}_Windows.exe"
       - name: Upload Windows Artifact
         uses: actions/upload-artifact@v4
         with:
           name: SpanShot-windows
-          path: SpanShot.exe
+          path: dist/SpanShot_*_Windows.exe
 
   build-macos:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build SpanShot DMGs (Apple Silicon + Universal)
+      - name: Build Versioned macOS DMGs (Apple Silicon + Universal)
+        env:
+          SPANSHOT_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}
         run: |
           if [ -f "./macos/build_dmg.sh" ]; then
             chmod +x ./macos/build_dmg.sh
@@ -46,10 +53,9 @@ jobs:
         with:
           name: SpanShot-macos
           path: |
-            SpanShot.dmg
-            SpanShot_AppleSilicon.dmg
-            macos/*.dmg
             macos/build/*.dmg
+            macos/*.dmg
+            *.dmg
 
   publish-release:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -61,7 +67,7 @@ jobs:
         with:
           path: release-assets
           merge-multiple: false
-      - name: Flatten Release Assets & Upload to GitHub Release
+      - name: Upload Versioned Assets to GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ github.ref_name }}

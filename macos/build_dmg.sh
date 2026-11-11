@@ -9,16 +9,18 @@ RESOURCES_DIR="$APP_DIR/Contents/Resources"
 ICONSET_DIR="$BUILD_DIR/AppIcon.iconset"
 ICNS_FILE="$BUILD_DIR/AppIcon.icns"
 DMG_STAGE="$BUILD_DIR/dmg_stage"
-DMG_UNIVERSAL_OUT="$BUILD_DIR/SpanShot.dmg"
-DMG_ARM64_OUT="$BUILD_DIR/SpanShot_AppleSilicon.dmg"
+APP_VERSION="${SPANSHOT_VERSION:-1.1.0}"
+APP_VERSION="${APP_VERSION#v}"
+DMG_UNIVERSAL_OUT="$BUILD_DIR/SpanShot_v${APP_VERSION}_macOS_Universal.dmg"
+DMG_ARM64_OUT="$BUILD_DIR/SpanShot_v${APP_VERSION}_macOS_AppleSilicon.dmg"
 MODULE_CACHE="/tmp/spanshot-swift-module-cache"
 
 echo "==> Cleaning previous build directory..."
 rm -rf "$BUILD_DIR"
 mkdir -p "$MACOS_BIN_DIR" "$RESOURCES_DIR" "$MODULE_CACHE"
 
-echo "==> Generating Info.plist (NSHighResolutionCapable=true, CFBundleIconFile=AppIcon)..."
-cat > "$APP_DIR/Contents/Info.plist" << 'EOF'
+echo "==> Generating Info.plist (version=$APP_VERSION, NSHighResolutionCapable=true, CFBundleIconFile=AppIcon)..."
+cat > "$APP_DIR/Contents/Info.plist" << EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -30,9 +32,9 @@ cat > "$APP_DIR/Contents/Info.plist" << 'EOF'
     <key>CFBundleIdentifier</key>
     <string>com.steeefanie.spanshot</string>
     <key>CFBundleVersion</key>
-    <string>1.0.0</string>
+    <string>${APP_VERSION}</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.0</string>
+    <string>${APP_VERSION}</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleExecutable</key>
