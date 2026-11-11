@@ -102,6 +102,7 @@ namespace SpanShot
 
         public RegionSelectorForm(CaptureActionMode presetMode = CaptureActionMode.None, IntPtr ignoreHwnd = default(IntPtr))
         {
+            UiTheme.RefreshSystemTheme();
             _presetMode = presetMode;
             _virtualBounds = SystemInformation.VirtualScreen;
             _detectedWindows = NativeMethods.GetVisibleWindowRectangles(ignoreHwnd);
@@ -766,12 +767,13 @@ namespace SpanShot
                 int py = (primary.Top - _virtualBounds.Top) + UiTheme.S(24);
                 Rectangle promptRect = new Rectangle(px, py, pw, ph);
                 using (SolidBrush pbg = new SolidBrush(UiTheme.ToolbarBg))
+                using (SolidBrush pfg = new SolidBrush(UiTheme.TextPrimary))
                 using (Pen pborder = new Pen(UiTheme.WeChatGreen, 1.5f))
                 using (StringFormat psf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
                 {
                     UiTheme.FillRoundedRect(g, pbg, promptRect, UiTheme.S(6));
                     UiTheme.DrawRoundedRect(g, pborder, promptRect, UiTheme.S(6));
-                    g.DrawString(prompt, _toolbarFont, Brushes.White, promptRect, psf);
+                    g.DrawString(prompt, _toolbarFont, pfg, promptRect, psf);
                 }
             }
 
@@ -846,14 +848,15 @@ namespace SpanShot
                 UiTheme.DrawRoundedRect(g, borderPen, _toolbarBounds, UiTheme.S(4));
 
                 // Annotation icon buttons
+                Color iconFg = UiTheme.TextPrimary;
                 DrawIconBtnBg(g, _btnRectTool, _activeTool == InlineAnnotateTool.Rectangle, _btnRectTool.Contains(_mousePos));
-                UiTheme.DrawIconRect(g, _btnRectTool, _activeTool == InlineAnnotateTool.Rectangle ? UiTheme.WeChatGreen : Color.White);
+                UiTheme.DrawIconRect(g, _btnRectTool, _activeTool == InlineAnnotateTool.Rectangle ? UiTheme.WeChatGreen : iconFg);
 
                 DrawIconBtnBg(g, _btnArrowTool, _activeTool == InlineAnnotateTool.Arrow, _btnArrowTool.Contains(_mousePos));
-                UiTheme.DrawIconArrow(g, _btnArrowTool, _activeTool == InlineAnnotateTool.Arrow ? UiTheme.WeChatGreen : Color.White);
+                UiTheme.DrawIconArrow(g, _btnArrowTool, _activeTool == InlineAnnotateTool.Arrow ? UiTheme.WeChatGreen : iconFg);
 
                 DrawIconBtnBg(g, _btnPenTool, _activeTool == InlineAnnotateTool.Pen, _btnPenTool.Contains(_mousePos));
-                UiTheme.DrawIconPen(g, _btnPenTool, _activeTool == InlineAnnotateTool.Pen ? UiTheme.WeChatGreen : Color.White);
+                UiTheme.DrawIconPen(g, _btnPenTool, _activeTool == InlineAnnotateTool.Pen ? UiTheme.WeChatGreen : iconFg);
 
                 int div1X = _btnPenTool.Right + UiTheme.S(5);
                 g.DrawLine(divPen, div1X, _toolbarBounds.Top + UiTheme.S(9), div1X, _toolbarBounds.Bottom - UiTheme.S(9));
@@ -861,11 +864,11 @@ namespace SpanShot
                 // Long Screenshot buttons (Vertical & Horizontal)
                 UiTheme.DrawPillButton(g, _btnVerticalScroll, "纵向长截",
                     _btnVerticalScroll.Contains(_mousePos) ? UiTheme.ToolbarHover : Color.Transparent,
-                    false, false, 3, _toolbarFont, Color.White);
+                    false, false, 3, _toolbarFont, iconFg);
 
                 UiTheme.DrawPillButton(g, _btnHorizontalScroll, "横向长截",
                     _btnHorizontalScroll.Contains(_mousePos) ? UiTheme.ToolbarHover : Color.Transparent,
-                    false, false, 3, _toolbarFont, Color.White);
+                    false, false, 3, _toolbarFont, iconFg);
 
                 int div2X = _btnHorizontalScroll.Right + UiTheme.S(5);
                 g.DrawLine(divPen, div2X, _toolbarBounds.Top + UiTheme.S(9), div2X, _toolbarBounds.Bottom - UiTheme.S(9));
@@ -873,16 +876,16 @@ namespace SpanShot
                 // Undo, Pin, Save, Cancel, Check
                 bool canUndo = _annotations.Count > 0;
                 DrawIconBtnBg(g, _btnUndoTool, false, canUndo && _btnUndoTool.Contains(_mousePos));
-                UiTheme.DrawIconUndo(g, _btnUndoTool, canUndo ? Color.White : Color.FromArgb(110, 110, 110));
+                UiTheme.DrawIconUndo(g, _btnUndoTool, canUndo ? iconFg : UiTheme.TextSecondary);
 
                 DrawIconBtnBg(g, _btnPin, false, _btnPin.Contains(_mousePos));
-                UiTheme.DrawIconPin(g, _btnPin, Color.White);
+                UiTheme.DrawIconPin(g, _btnPin, iconFg);
 
                 DrawIconBtnBg(g, _btnSave, false, _btnSave.Contains(_mousePos));
-                UiTheme.DrawIconSave(g, _btnSave, Color.White);
+                UiTheme.DrawIconSave(g, _btnSave, iconFg);
 
                 DrawIconBtnBg(g, _btnCancel, false, _btnCancel.Contains(_mousePos));
-                UiTheme.DrawIconClose(g, _btnCancel, _btnCancel.Contains(_mousePos) ? UiTheme.AccentRed : Color.FromArgb(220, 220, 220));
+                UiTheme.DrawIconClose(g, _btnCancel, _btnCancel.Contains(_mousePos) ? UiTheme.AccentRed : UiTheme.TextSecondary);
 
                 DrawIconBtnBg(g, _btnCopyFinish, false, _btnCopyFinish.Contains(_mousePos));
                 UiTheme.DrawIconCheck(g, _btnCopyFinish, UiTheme.WeChatGreen);
@@ -946,13 +949,15 @@ namespace SpanShot
                 {
                     Rectangle sr = _colorSwatchRects[i];
                     using (SolidBrush sb = new SolidBrush(UiTheme.AnnotColors[i]))
+                    using (Pen swatchOutline = new Pen(UiTheme.BorderSubtle, 1f))
                     {
                         UiTheme.FillRoundedRect(g, sb, sr, UiTheme.S(2));
+                        UiTheme.DrawRoundedRect(g, swatchOutline, sr, UiTheme.S(2));
                     }
                     if (_selectedColorIndex == i)
                     {
                         Rectangle outer = new Rectangle(sr.X - UiTheme.S(2), sr.Y - UiTheme.S(2), sr.Width + UiTheme.S(4), sr.Height + UiTheme.S(4));
-                        using (Pen sp = new Pen( Color.White, Math.Max(1.5f, 1.5f * UiTheme.DpiScale)))
+                        using (Pen sp = new Pen(UiTheme.TextPrimary, Math.Max(1.5f, 1.5f * UiTheme.DpiScale)))
                         {
                             UiTheme.DrawRoundedRect(g, sp, outer, UiTheme.S(3));
                         }

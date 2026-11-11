@@ -98,6 +98,7 @@ namespace SpanShot
 
         public ScrollCaptureSessionForm(Rectangle physicalCaptureRect, ScrollDirection direction)
         {
+            UiTheme.RefreshSystemTheme();
             _captureRect = physicalCaptureRect;
             _direction = direction;
             _engine = new StitchEngine(direction);
@@ -113,7 +114,7 @@ namespace SpanShot
             TopMost = true;
             ShowInTaskbar = false;
             BackColor = UiTheme.ToolbarBg;
-            ForeColor = Color.White;
+            ForeColor = UiTheme.TextPrimary;
             KeyPreview = true;
             DoubleBuffered = true;
 
@@ -477,15 +478,16 @@ namespace SpanShot
             string title = _direction == ScrollDirection.Vertical ? "纵向长截图" : "横向长截图";
             using (StringFormat sfLeft = new StringFormat { Alignment = StringAlignment.Near, LineAlignment = StringAlignment.Center })
             using (StringFormat sfRight = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center })
+            using (SolidBrush titleBrush = new SolidBrush(UiTheme.TextPrimary))
             using (SolidBrush subBrush = new SolidBrush(UiTheme.TextSecondary))
             {
                 Rectangle headerInner = new Rectangle(pad, 0, Width - pad * 2, UiTheme.S(32));
-                g.DrawString(title, _titleFont, Brushes.White, headerInner, sfLeft);
+                g.DrawString(title, _titleFont, titleBrush, headerInner, sfLeft);
                 g.DrawString(_dimensionText, _dimFont, subBrush, headerInner, sfRight);
             }
 
-            using (SolidBrush canvasBg = new SolidBrush(Color.FromArgb(24, 24, 26)))
-            using (Pen canvasBorder = new Pen(Color.FromArgb(62, 62, 66), 1f))
+            using (SolidBrush canvasBg = new SolidBrush(UiTheme.CanvasBg))
+            using (Pen canvasBorder = new Pen(UiTheme.BorderSubtle, 1f))
             {
                 UiTheme.FillRoundedRect(g, canvasBg, _previewCanvasRect, UiTheme.S(4));
                 UiTheme.DrawRoundedRect(g, canvasBorder, _previewCanvasRect, UiTheme.S(4));
@@ -502,7 +504,7 @@ namespace SpanShot
                 _autoScrolling ? "暂停" : "自动滚动",
                 _autoScrolling ? UiTheme.AccentOrange : UiTheme.BgPill,
                 _btnAutoToggleRect.Contains(_mousePos), false, 3, _btnFont,
-                _autoScrolling ? Color.Black : Color.White);
+                _autoScrolling ? Color.Black : UiTheme.TextPrimary);
 
             if (_btnCancelRect.Contains(_mousePos))
             {
@@ -511,7 +513,7 @@ namespace SpanShot
                     UiTheme.FillRoundedRect(g, b, _btnCancelRect, UiTheme.S(3));
                 }
             }
-            UiTheme.DrawIconClose(g, _btnCancelRect, _btnCancelRect.Contains(_mousePos) ? UiTheme.AccentRed : Color.FromArgb(220, 220, 220));
+            UiTheme.DrawIconClose(g, _btnCancelRect, _btnCancelRect.Contains(_mousePos) ? UiTheme.AccentRed : UiTheme.TextSecondary);
 
             UiTheme.DrawPillButton(g, _btnFinishRect, "完成",
                 UiTheme.WeChatGreen, _btnFinishRect.Contains(_mousePos), false, 3, _btnFont, Color.White);

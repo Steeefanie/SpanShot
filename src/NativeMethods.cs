@@ -16,6 +16,7 @@ namespace SpanShot
         public const int WS_EX_TOPMOST = 0x00000008;
         public const int WS_EX_NOACTIVATE = 0x08000000;
 
+        public const int WM_SETTINGCHANGE = 0x001A;
         public const int WM_SYSCOMMAND = 0x0112;
         public const int SC_MINIMIZE = 0xF020;
         public const int WM_HOTKEY = 0x0312;

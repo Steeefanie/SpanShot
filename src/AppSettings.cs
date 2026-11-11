@@ -138,12 +138,12 @@ namespace SpanShot
             }
             catch (UnauthorizedAccessException)
             {
-                errorMessage = "该文件夹无写入权限，请选择其他文件夹";
+                errorMessage = "该文件夹无写入权限，请重选";
                 return false;
             }
             catch
             {
-                errorMessage = "该文件夹不可写入，请选择其他文件夹";
+                errorMessage = "该文件夹不可写入，请重选";
                 return false;
             }
             finally

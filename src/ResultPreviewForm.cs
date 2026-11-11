@@ -37,6 +37,8 @@ namespace SpanShot
         private Button _btnToolCrop;
         private Button _btnUndo;
         private Button _btnZoomToggle;
+        private Label _statusLabel;
+        private Timer _statusTimer;
 
         private EditTool _currentTool = EditTool.PanBrowse;
         private bool _fitToWindow;
@@ -66,12 +68,13 @@ namespace SpanShot
 
         private void InitializeComponent()
         {
+            UiTheme.RefreshSystemTheme();
             UpdateWindowTitle();
             Icon = AppIcon.GetWindowIcon();
             Size = new Size(UiTheme.S(960), UiTheme.S(680));
             StartPosition = FormStartPosition.CenterScreen;
             BackColor = UiTheme.BgDark;
-            ForeColor = Color.White;
+            ForeColor = UiTheme.TextPrimary;
             KeyPreview = true;
 
             Panel topBar = new Panel
@@ -131,6 +134,7 @@ namespace SpanShot
             curX += btnSaveAs.Width + gap;
 
             Button btnCopyClose = CreateButton("完成", new Point(curX, y), new Size(UiTheme.S(84), h), UiTheme.WeChatGreen, btnFont);
+            btnCopyClose.ForeColor = Color.White;
             btnCopyClose.Click += (s, e) =>
             {
                 CopyToClipboardSafe();
@@ -149,17 +153,39 @@ namespace SpanShot
             topBar.Controls.Add(btnSaveAs);
             topBar.Controls.Add(btnCopyClose);
 
+            int statusX = curX + btnCopyClose.Width + UiTheme.S(12);
+            _statusLabel = new Label
+            {
+                AutoSize = false,
+                AutoEllipsis = true,
+                TextAlign = ContentAlignment.MiddleRight,
+                Font = UiTheme.FontPx(12, false),
+                ForeColor = UiTheme.TextSecondary,
+                BackColor = Color.Transparent,
+                Bounds = new Rectangle(statusX, y, Math.Max(UiTheme.S(80), Width - statusX - UiTheme.S(24)), h),
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+                Text = string.Empty
+            };
+            topBar.Controls.Add(_statusLabel);
+
+            _statusTimer = new Timer { Interval = 2200 };
+            _statusTimer.Tick += (s, e) =>
+            {
+                _statusTimer.Stop();
+                if (_statusLabel != null) _statusLabel.Text = string.Empty;
+            };
+
             _scrollPanel = new Panel
             {
                 Dock = DockStyle.Fill,
                 AutoScroll = true,
-                BackColor = Color.FromArgb(20, 20, 22)
+                BackColor = UiTheme.CanvasBg
             };
 
             _picBox = new PictureBox
             {
                 Image = _workingBitmap,
-                BackColor = Color.FromArgb(20, 20, 22)
+                BackColor = UiTheme.CanvasBg
             };
             _picBox.MouseDown += OnPicMouseDown;
             _picBox.MouseMove += OnPicMouseMove;
@@ -201,6 +227,7 @@ namespace SpanShot
         {
             if (btn == null) return;
             btn.BackColor = active ? activeColor : UiTheme.BgPill;
+            btn.ForeColor = active ? Color.White : UiTheme.TextPrimary;
         }
 
         private static Button CreateButton(string text, Point location, Size size, Color backColor, Font font)
@@ -212,7 +239,7 @@ namespace SpanShot
                 Size = size,
                 FlatStyle = FlatStyle.Flat,
                 BackColor = backColor,
-                ForeColor = Color.White,
+                ForeColor = UiTheme.TextPrimary,
                 Font = font,
                 Cursor = Cursors.Hand
             };
@@ -505,6 +532,18 @@ namespace SpanShot
             Close();
         }
 
+        public void ShowInlineNotice(string message, Color accent)
+        {
+            if (_statusLabel == null) return;
+            _statusLabel.ForeColor = (accent == UiTheme.WeChatGreen) ? UiTheme.LinkBlue : accent;
+            _statusLabel.Text = message ?? string.Empty;
+            if (_statusTimer != null)
+            {
+                _statusTimer.Stop();
+                _statusTimer.Start();
+            }
+        }
+
         private void SaveToFile()
         {
             using (SaveFileDialog sfd = new SaveFileDialog())
@@ -523,7 +562,7 @@ namespace SpanShot
                         ? ImageFormat.Jpeg : ImageFormat.Png;
                     _workingBitmap.Save(sfd.FileName, fmt);
                     ManuallySaved = true;
-                    ToastForm.ShowToast("已保存", UiTheme.WeChatGreen);
+                    ShowInlineNotice("已保存", UiTheme.WeChatGreen);
                 }
             }
         }
@@ -533,7 +572,7 @@ namespace SpanShot
             base.OnKeyDown(e);
             if (e.KeyCode == Keys.Escape) Close();
             else if (e.KeyCode == Keys.Enter) { CopyToClipboardSafe(); ConfirmedCopy = true; Close(); }
-            else if (e.Control && e.KeyCode == Keys.C) CopyToClipboardSafe();
+            else if (e.Control && e.KeyCode == Keys.C) { CopyToClipboardSafe(); ShowInlineNotice("已复制到剪贴板", UiTheme.WeChatGreen); }
             else if (e.Control && e.KeyCode == Keys.S) SaveToFile();
             else if (e.Control && e.KeyCode == Keys.Z) PerformUndo();
         }
@@ -542,6 +581,7 @@ namespace SpanShot
         {
             if (disposing)
             {
+                if (_statusTimer != null) _statusTimer.Dispose();
                 if (_workingBitmap != null) _workingBitmap.Dispose();
                 while (_history.Count > 0) _history.Pop().Dispose();
             }

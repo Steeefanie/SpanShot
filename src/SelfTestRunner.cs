@@ -330,8 +330,9 @@ namespace SpanShot
             Bitmap bmp = new Bitmap(width, height, PixelFormat.Format32bppArgb);
             using (Graphics g = Graphics.FromImage(bmp))
             using (Pen gridPen = new Pen(Color.FromArgb(212, 216, 222), 1f))
-            using (Font cellFont = new Font("Microsoft YaHei UI", 9f, FontStyle.Regular))
+            using (Font cellFont = new Font("Consolas", 9f, FontStyle.Regular))
             {
+                g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
                 // 100% uniform white background like real Excel / Feishu sheet
                 g.Clear(Color.White);
 
@@ -355,7 +356,7 @@ namespace SpanShot
                         int y = r * rowH;
                         string cellVal = (c == 0)
                             ? string.Format("{0}", 1001 + r)
-                            : string.Format("¥{0:N2}", (r + 1) * 37.5 + (c + 1) * 14.2);
+                            : string.Format("C{0}:${1:N2}", c, (r + 1) * 37.5 + (c + 1) * 14.2);
                         g.DrawString(cellVal, cellFont, Brushes.Black, x + 8, y + 7);
                     }
                 }

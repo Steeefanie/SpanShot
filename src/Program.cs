@@ -59,6 +59,7 @@ namespace SpanShot
 
             try
             {
+                UpdateManager.CleanupOldBinaryOnStartup();
                 AppSettings.SyncAutoStartPathIfEnabled();
 
                 Application.EnableVisualStyles();

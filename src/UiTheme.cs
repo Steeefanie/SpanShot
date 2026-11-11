@@ -2,32 +2,140 @@ using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
+using Microsoft.Win32;
 
 namespace SpanShot
 {
     internal static class UiTheme
     {
-        // Apple UI Blue & macOS Dark Mode Palette
-        public static readonly Color WeChatGreen = Color.FromArgb(0, 122, 255);    // Apple System Blue #007AFF
-        public static readonly Color ToolbarBg = Color.FromArgb(44, 44, 46);       // #2C2C2E
-        public static readonly Color ToolbarHover = Color.FromArgb(58, 58, 60);    // #3A3A3C
-        public static readonly Color ToolbarBorder = Color.FromArgb(72, 72, 74);   // #48484A
-        public static readonly Color DividerColor = Color.FromArgb(72, 72, 74);    // #48484A
+        private static bool? _cachedDarkMode;
+        private static bool? _forcedDarkModeOverride;
 
-        public static readonly Color BgDark = Color.FromArgb(28, 28, 30);          // #1C1C1E
-        public static readonly Color BgCard = Color.FromArgb(44, 44, 46);          // #2C2C2E
-        public static readonly Color BgCardHover = Color.FromArgb(58, 58, 60);     // #3A3A3C
-        public static readonly Color BgPill = Color.FromArgb(58, 58, 60);          // #3A3A3C
-        public static readonly Color BorderSubtle = Color.FromArgb(72, 72, 74);    // #48484A
+        public static bool IsDarkMode
+        {
+            get
+            {
+                if (_forcedDarkModeOverride.HasValue)
+                {
+                    return _forcedDarkModeOverride.Value;
+                }
+                if (!_cachedDarkMode.HasValue)
+                {
+                    _cachedDarkMode = ReadSystemDarkMode();
+                }
+                return _cachedDarkMode.Value;
+            }
+        }
 
+        public static bool RefreshSystemTheme()
+        {
+            bool prev = IsDarkMode;
+            _cachedDarkMode = ReadSystemDarkMode();
+            return _cachedDarkMode.Value != prev;
+        }
+
+        internal static void SetThemeOverrideForTest(bool? forceDark)
+        {
+            _forcedDarkModeOverride = forceDark;
+        }
+
+        private static bool ReadSystemDarkMode()
+        {
+            try
+            {
+                using (RegistryKey key = Registry.CurrentUser.OpenSubKey(
+                    @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", false))
+                {
+                    if (key != null)
+                    {
+                        object val = key.GetValue("AppsUseLightTheme");
+                        if (val != null)
+                        {
+                            return Convert.ToInt32(val) == 0;
+                        }
+                    }
+                }
+            }
+            catch { }
+            return false;
+        }
+
+        // Accent Colors
+        public static readonly Color WeChatGreen = Color.FromArgb(0, 122, 255);    // Primary Blue #007AFF
         public static readonly Color AccentBlue = Color.FromArgb(0, 122, 255);     // #007AFF
         public static readonly Color AccentTeal = Color.FromArgb(10, 132, 255);    // #0A84FF
         public static readonly Color AccentGreen = Color.FromArgb(0, 122, 255);    // #007AFF
         public static readonly Color AccentOrange = Color.FromArgb(255, 159, 10);  // #FF9F0A
         public static readonly Color AccentRed = Color.FromArgb(255, 69, 58);      // #FF453A
         public static readonly Color AccentPurple = Color.FromArgb(94, 92, 230);   // #5E5CE6
-        public static readonly Color TextPrimary = Color.FromArgb(245, 245, 247);  // #F5F5F7
-        public static readonly Color TextSecondary = Color.FromArgb(152, 152, 157);// #98989D
+
+        public static Color LinkBlue
+        {
+            get { return IsDarkMode ? Color.FromArgb(56, 152, 255) : Color.FromArgb(0, 112, 240); }
+        }
+
+        // Dynamic Light/Dark Surfaces modeled after steeefanie.top tokens.css:
+        // Light: --page #fafafa, --surface #ffffff, --surface-soft #f3f3f3, --surface-raised #ececec, --text #222222, --muted #888888, --border #d9d9d9
+        // Dark:  --page #111111, --surface #1d1d1d, --surface-soft #1a1a1a, --surface-raised #262626, --text #eeeeee, --muted #888888, --border #333333
+        public static Color BgDark
+        {
+            get { return IsDarkMode ? Color.FromArgb(17, 17, 17) : Color.FromArgb(250, 250, 250); }
+        }
+
+        public static Color ToolbarBg
+        {
+            get { return IsDarkMode ? Color.FromArgb(29, 29, 29) : Color.FromArgb(255, 255, 255); }
+        }
+
+        public static Color ToolbarHover
+        {
+            get { return IsDarkMode ? Color.FromArgb(38, 38, 38) : Color.FromArgb(236, 236, 236); }
+        }
+
+        public static Color ToolbarBorder
+        {
+            get { return IsDarkMode ? Color.FromArgb(51, 51, 51) : Color.FromArgb(217, 217, 217); }
+        }
+
+        public static Color DividerColor
+        {
+            get { return IsDarkMode ? Color.FromArgb(51, 51, 51) : Color.FromArgb(217, 217, 217); }
+        }
+
+        public static Color BgCard
+        {
+            get { return IsDarkMode ? Color.FromArgb(29, 29, 29) : Color.FromArgb(243, 243, 243); }
+        }
+
+        public static Color BgCardHover
+        {
+            get { return IsDarkMode ? Color.FromArgb(38, 38, 38) : Color.FromArgb(236, 236, 236); }
+        }
+
+        public static Color BgPill
+        {
+            get { return IsDarkMode ? Color.FromArgb(29, 29, 29) : Color.FromArgb(243, 243, 243); }
+        }
+
+        public static Color CanvasBg
+        {
+            get { return IsDarkMode ? Color.FromArgb(26, 26, 26) : Color.FromArgb(243, 243, 243); }
+        }
+
+        public static Color BorderSubtle
+        {
+            get { return IsDarkMode ? Color.FromArgb(51, 51, 51) : Color.FromArgb(217, 217, 217); }
+        }
+
+        public static Color TextPrimary
+        {
+            get { return IsDarkMode ? Color.FromArgb(238, 238, 238) : Color.FromArgb(34, 34, 34); }
+        }
+
+        public static Color TextSecondary
+        {
+            get { return Color.FromArgb(136, 136, 136); }
+        }
 
         // Annotation color swatches (Apple System Colors)
         public static readonly Color[] AnnotColors = new Color[]
@@ -71,7 +179,7 @@ namespace SpanShot
         public static Font FontPx(int designPx, bool bold = false)
         {
             float scaledPx = Math.Max(10f, designPx * DpiScale);
-            return new Font("Microsoft YaHei UI", scaledPx, bold ? FontStyle.Bold : FontStyle.Regular, GraphicsUnit.Pixel);
+            return new Font("Microsoft YaHei", scaledPx, bold ? FontStyle.Bold : FontStyle.Regular, GraphicsUnit.Pixel);
         }
 
         public static GraphicsPath CreateRoundedRectPath(Rectangle rect, int radius)
@@ -123,16 +231,30 @@ namespace SpanShot
                 Math.Max(0, Math.Min(255, c.B + delta)));
         }
 
+        public static Color AdjustHoverFill(Color baseColor)
+        {
+            if (baseColor.A == 0) return baseColor;
+            int lum = baseColor.R + baseColor.G + baseColor.B;
+            if (lum > 600)
+            {
+                return Lighten(baseColor, -12);
+            }
+            return Lighten(baseColor, 16);
+        }
+
         public static void DrawPillButton(
             Graphics g, Rectangle rect, string text, Color baseColor,
             bool hovered, bool activeBorder = false, int radius = 4, Font customFont = null, Color? textColor = null)
         {
             if (rect.Width <= 0 || rect.Height <= 0) return;
-            Color fill = hovered ? Lighten(baseColor, 18) : baseColor;
+            Color fill = hovered ? AdjustHoverFill(baseColor) : baseColor;
             int r = S(radius);
-            using (SolidBrush b = new SolidBrush(fill))
+            if (fill.A > 0)
             {
-                FillRoundedRect(g, b, rect, r);
+                using (SolidBrush b = new SolidBrush(fill))
+                {
+                    FillRoundedRect(g, b, rect, r);
+                }
             }
             if (activeBorder)
             {
@@ -143,7 +265,7 @@ namespace SpanShot
             }
 
             Font f = customFont ?? FontPx(13, false);
-            Color fg = textColor ?? Color.White;
+            Color fg = textColor ?? TextPrimary;
             try
             {
                 using (SolidBrush tb = new SolidBrush(fg))
@@ -224,12 +346,10 @@ namespace SpanShot
 
             using (Pen p = new Pen(color, Math.Max(1.7f, 1.7f * u)) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
             {
-                // Top shaft + U-turn arc + bottom shaft
                 g.DrawLine(p, leftX, topY, rightLineEnd, topY);
                 g.DrawArc(p, rightLineEnd - arcR, topY, arcR * 2f, arcR * 2f, -90f, 180f);
                 g.DrawLine(p, cx - 2.5f * u, botY, rightLineEnd, botY);
 
-                // Left-pointing arrowhead at (leftX, topY)
                 g.DrawLine(p, leftX + 3.5f * u, topY - 3.5f * u, leftX, topY);
                 g.DrawLine(p, leftX + 3.5f * u, topY + 3.5f * u, leftX, topY);
             }
@@ -294,9 +414,10 @@ namespace SpanShot
 
         private ToastForm(string message, Color accent)
         {
+            UiTheme.RefreshSystemTheme();
             _message = message;
             _accent = accent;
-            _font = UiTheme.FontPx(14, false);
+            _font = UiTheme.FontPx(12, false);
 
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.Manual;
@@ -308,10 +429,10 @@ namespace SpanShot
             using (Graphics g = CreateGraphics())
             {
                 SizeF sz = g.MeasureString(message, _font);
-                int w = Math.Max(UiTheme.S(180), (int)sz.Width + UiTheme.S(40));
-                int h = UiTheme.S(40);
+                int w = Math.Min(UiTheme.S(260), Math.Max(UiTheme.S(140), (int)sz.Width + UiTheme.S(28)));
+                int h = UiTheme.S(34);
                 Rectangle screen = Screen.PrimaryScreen.WorkingArea;
-                Bounds = new Rectangle(screen.Left + (screen.Width - w) / 2, screen.Top + UiTheme.S(36), w, h);
+                Bounds = new Rectangle(screen.Left + (screen.Width - w) / 2, screen.Top + UiTheme.S(32), w, h);
             }
 
             Region = new Region(UiTheme.CreateRoundedRectPath(new Rectangle(0, 0, Width, Height), UiTheme.S(6)));
@@ -356,13 +477,21 @@ namespace SpanShot
             g.SmoothingMode = SmoothingMode.AntiAlias;
 
             Rectangle rect = new Rectangle(0, 0, Width - 1, Height - 1);
+            Rectangle textRect = new Rectangle(UiTheme.S(10), 0, Width - UiTheme.S(20), Height);
             using (SolidBrush bg = new SolidBrush(UiTheme.ToolbarBg))
-            using (Pen border = new Pen(_accent, 1.5f))
-            using (StringFormat sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
+            using (Pen border = new Pen(_accent, 1f))
+            using (SolidBrush fg = new SolidBrush(UiTheme.TextPrimary))
+            using (StringFormat sf = new StringFormat
+            {
+                Alignment = StringAlignment.Center,
+                LineAlignment = StringAlignment.Center,
+                FormatFlags = StringFormatFlags.NoWrap,
+                Trimming = StringTrimming.EllipsisCharacter
+            })
             {
                 UiTheme.FillRoundedRect(g, bg, rect, UiTheme.S(6));
                 UiTheme.DrawRoundedRect(g, border, rect, UiTheme.S(6));
-                g.DrawString(_message, _font, Brushes.White, rect, sf);
+                g.DrawString(_message, _font, fg, textRect, sf);
             }
         }
 
@@ -380,6 +509,24 @@ namespace SpanShot
         {
             try
             {
+                for (int i = Application.OpenForms.Count - 1; i >= 0; i--)
+                {
+                    Form openForm = Application.OpenForms[i];
+                    if (openForm == null || openForm.IsDisposed || !openForm.Visible) continue;
+                    ResultPreviewForm preview = openForm as ResultPreviewForm;
+                    if (preview != null)
+                    {
+                        preview.ShowInlineNotice(message, accent);
+                        return;
+                    }
+                    MainForm main = openForm as MainForm;
+                    if (main != null)
+                    {
+                        main.ShowInlineNotice(message, accent);
+                        return;
+                    }
+                }
+
                 ToastForm toast = new ToastForm(message, accent);
                 toast.Show();
             }
