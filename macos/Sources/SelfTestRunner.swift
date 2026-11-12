@@ -12,10 +12,11 @@ public enum SelfTestRunner {
         let tVertPass = testSparseExcelTableVerticalStitchingNoLineShift()
         let tHorizPass = testSparseExcelTableHorizontalStitchingNoLineShift()
         let webTablePass = testEnterpriseWebTableWithWideFrozenLeftAndStaticTopBottom()
+        let v110Pass = testV110SettingsUpdaterAndIcon()
 
         print("----------------------------------------------------")
-        if vPass && hPass && sPass && tVertPass && tHorizPass && webTablePass {
-            print("OVERALL RESULT: ALL 6 TEST SUITES PASSED (100% Pixel-Exact, 0 Line Shift)")
+        if vPass && hPass && sPass && tVertPass && tHorizPass && webTablePass && v110Pass {
+            print("OVERALL RESULT: ALL 7 TEST SUITES PASSED (100% Pixel-Exact, 0 Line Shift, v1.1.0 Verified)")
             return 0
         } else {
             print("OVERALL RESULT: SOME TESTS FAILED")
@@ -648,5 +649,47 @@ public enum SelfTestRunner {
         bmp.drawString("合计:", x: 105, y: sbY + 24, fontSize: 12.0, bold: false, r: 0, g: 0, b: 0)
 
         return bmp
+    }
+
+    private static func testV110SettingsUpdaterAndIcon() -> Bool {
+        print("\n[Test 7] v1.1.0 Features (Verified Auto-Save + Semantic Version Compare + Scissors Icon)")
+
+        // 1. Semantic version comparison
+        guard UpdateManager.currentVersion == "1.1.0" else { return false }
+        guard UpdateManager.isVersionNewer(candidate: "v1.2.0", current: "1.1.0") else { return false }
+        guard !UpdateManager.isVersionNewer(candidate: "v1.1.0", current: "1.1.0") else { return false }
+        guard !UpdateManager.isVersionNewer(candidate: "v1.0.9", current: "1.1.0") else { return false }
+
+        // 2. Folder write validation & auto-save bitmap
+        let tmpDir = (NSTemporaryDirectory() as NSString).appendingPathComponent("SpanShot_SelfTest_\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(atPath: tmpDir) }
+        guard !AppSettings.validateWritableFolder(tmpDir) else { return false } // Does not exist yet
+        try? FileManager.default.createDirectory(atPath: tmpDir, withIntermediateDirectories: true)
+        guard AppSettings.validateWritableFolder(tmpDir) else { return false }
+
+        let sampleBmp = RawBitmap(width: 64, height: 48)
+        sampleBmp.clear(r: 0, g: 122, b: 255)
+        guard let saved1 = AppSettings.tryAutoSaveBitmap(sampleBmp, folderPath: tmpDir, tag: "Test"),
+              FileManager.default.fileExists(atPath: saved1) else {
+            return false
+        }
+        guard let saved2 = AppSettings.tryAutoSaveBitmap(sampleBmp, folderPath: tmpDir, tag: "Test"),
+              FileManager.default.fileExists(atPath: saved2),
+              saved1 != saved2 else {
+            return false
+        }
+
+        // 3. Scissors + Viewfinder AppIcon & StatusBar template icon rendering
+        guard let iconRep = AppIconRenderer.renderAppIconBitmap(pixelSize: 128),
+              iconRep.pixelsWide == 128 && iconRep.pixelsHigh == 128 else {
+            return false
+        }
+        let statusImg = AppIconRenderer.renderStatusBarTemplateIcon()
+        guard statusImg.isTemplate && !statusImg.representations.isEmpty else {
+            return false
+        }
+
+        print("  -> [PASS] v1.1.0 Verified Auto-Save, Updater & Scissors Icon Verified!")
+        return true
     }
 }

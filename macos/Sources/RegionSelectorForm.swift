@@ -84,10 +84,23 @@ public final class RegionSelectorForm: NSPanel {
     fileprivate var colorSwatchRects: [NSRect] = Array(repeating: .zero, count: 5)
 
     fileprivate var mousePos: NSPoint = .zero
+    private var companionPanels: [CompanionSelectorPanel] = []
     private var localKeyMonitor: Any?
     private var globalKeyMonitor: Any?
     private var onComplete: ((RegionSelectorForm) -> Void)?
     private var finished = false
+
+    /// Companion full-screen overlay panel for secondary/tertiary displays on macOS when "Displays have separate Spaces" is enabled.
+    private final class CompanionSelectorPanel: NSPanel {
+        weak var ownerSelector: RegionSelectorForm?
+
+        override var canBecomeKey: Bool { true }
+        override var canBecomeMain: Bool { true }
+
+        override func cancelOperation(_ sender: Any?) {
+            ownerSelector?.handleEscapeAction()
+        }
+    }
 
     /// Selected rectangle in global top-down logical screen coordinates (used by ScrollCaptureSessionForm and PinWindowForm).
     public var selectedPhysicalRect: CGRect {
@@ -101,20 +114,26 @@ public final class RegionSelectorForm: NSPanel {
 
     public private(set) var chosenAction: CaptureActionMode = .none
     public private(set) var annotatedRegionBitmap: RawBitmap?
+    public let captureWasBlockedByPermission: Bool
 
     public init(presetMode: CaptureActionMode = .none) {
+        UiTheme.refreshSystemTheme()
         self.presetMode = presetMode
         self.virtualBoundsTopDown = ScreenCapturer.virtualScreenTopDownBounds
         self.detectedWindows = ScreenCapturer.getVisibleWindowRectangles()
-        self.desktopSnapshot = ScreenCapturer.captureRegion(self.virtualBoundsTopDown)
+        let captured = ScreenCapturer.captureRegionWithStatus(self.virtualBoundsTopDown)
+        self.desktopSnapshot = captured.bitmap
+        self.captureWasBlockedByPermission = captured.isFallback
         self.desktopNSImage = self.desktopSnapshot.toNSImage()
         self.backingScaleX = CGFloat(self.desktopSnapshot.width) / max(1.0, self.virtualBoundsTopDown.width)
         self.backingScaleY = CGFloat(self.desktopSnapshot.height) / max(1.0, self.virtualBoundsTopDown.height)
 
-        let cocoaFrame = ScreenCapturer.topDownToCocoa(self.virtualBoundsTopDown)
+        let allScreens = NSScreen.screens
+        let primaryCocoaFrame = allScreens.first?.frame ?? ScreenCapturer.topDownToCocoa(self.virtualBoundsTopDown)
+        let primaryTopDown = ScreenCapturer.cocoaToTopDown(primaryCocoaFrame).integral
 
         super.init(
-            contentRect: cocoaFrame,
+            contentRect: primaryCocoaFrame,
             styleMask: [.borderless],
             backing: .buffered,
             defer: false
@@ -128,9 +147,45 @@ public final class RegionSelectorForm: NSPanel {
         self.acceptsMouseMovedEvents = true
         self.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
-        let view = SelectorCanvasView(frame: NSRect(x: 0, y: 0, width: cocoaFrame.width, height: cocoaFrame.height))
+        let view = SelectorCanvasView(frame: NSRect(x: 0, y: 0, width: primaryCocoaFrame.width, height: primaryCocoaFrame.height))
         view.owner = self
+        view.virtualOffset = NSPoint(
+            x: primaryTopDown.origin.x - self.virtualBoundsTopDown.origin.x,
+            y: primaryTopDown.origin.y - self.virtualBoundsTopDown.origin.y
+        )
         self.contentView = view
+
+        // Create a dedicated full-screen overlay NSPanel for each additional display
+        // so macOS WindowServer ("Displays have separate Spaces") renders across all monitors simultaneously.
+        if allScreens.count > 1 {
+            for scr in allScreens.dropFirst() {
+                let scrCocoa = scr.frame
+                let scrTopDown = ScreenCapturer.cocoaToTopDown(scrCocoa).integral
+                let panel = CompanionSelectorPanel(
+                    contentRect: scrCocoa,
+                    styleMask: [.borderless],
+                    backing: .buffered,
+                    defer: false
+                )
+                panel.ownerSelector = self
+                panel.isOpaque = true
+                panel.level = .screenSaver
+                panel.hasShadow = false
+                panel.sharingType = .none
+                panel.isReleasedWhenClosed = false
+                panel.acceptsMouseMovedEvents = true
+                panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+
+                let subView = SelectorCanvasView(frame: NSRect(x: 0, y: 0, width: scrCocoa.width, height: scrCocoa.height))
+                subView.owner = self
+                subView.virtualOffset = NSPoint(
+                    x: scrTopDown.origin.x - self.virtualBoundsTopDown.origin.x,
+                    y: scrTopDown.origin.y - self.virtualBoundsTopDown.origin.y
+                )
+                panel.contentView = subView
+                self.companionPanels.append(panel)
+            }
+        }
     }
 
     override public var canBecomeKey: Bool { true }
@@ -141,9 +196,27 @@ public final class RegionSelectorForm: NSPanel {
         handleEscapeAction()
     }
 
+    fileprivate func refreshAllDisplays() {
+        self.contentView?.needsDisplay = true
+        for panel in companionPanels {
+            panel.contentView?.needsDisplay = true
+        }
+    }
+
+    private func closeAllDisplays() {
+        for panel in companionPanels {
+            panel.orderOut(nil)
+        }
+        companionPanels.removeAll()
+        self.orderOut(nil)
+    }
+
     public func beginSelection(completion: @escaping (RegionSelectorForm) -> Void) {
         self.onComplete = completion
         NSApp.activate(ignoringOtherApps: true)
+        for panel in companionPanels {
+            panel.orderFrontRegardless()
+        }
         self.makeKeyAndOrderFront(nil)
         self.makeFirstResponder(self.contentView)
 
@@ -152,9 +225,17 @@ public final class RegionSelectorForm: NSPanel {
             x: curTopDown.x - virtualBoundsTopDown.origin.x,
             y: curTopDown.y - virtualBoundsTopDown.origin.y
         )
+        // If the mouse cursor starts on a secondary display, focus its companion panel
+        let curCocoa = NSEvent.mouseLocation
+        for panel in companionPanels where panel.frame.contains(curCocoa) {
+            panel.makeKeyAndOrderFront(nil)
+            panel.makeFirstResponder(panel.contentView)
+            break
+        }
+
         hoverWindowRect = findHoveredWindowRect(localPt: mousePos)
         updateCursorForPoint(mousePos)
-        contentView?.needsDisplay = true
+        refreshAllDisplays()
 
         localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self = self, !self.finished else { return event }
@@ -186,7 +267,7 @@ public final class RegionSelectorForm: NSPanel {
             activeDragZone = .none
             hoverWindowRect = findHoveredWindowRect(localPt: mousePos)
             updateCursorForPoint(mousePos)
-            contentView?.needsDisplay = true
+            refreshAllDisplays()
         } else {
             cancelSelection()
         }
@@ -209,7 +290,7 @@ public final class RegionSelectorForm: NSPanel {
         if hasCmdOrCtrl && ch == "z" {
             if !annotations.isEmpty {
                 _ = annotations.popLast()
-                contentView?.needsDisplay = true
+                refreshAllDisplays()
             }
             return true
         } else if event.keyCode == 36 || event.keyCode == 76 || event.keyCode == 49 || (hasCmdOrCtrl && ch == "c") {
@@ -240,7 +321,7 @@ public final class RegionSelectorForm: NSPanel {
                 selectionRect.origin.y = max(0, min(maxH - selectionRect.height, selectionRect.origin.y + dy))
             }
             updateToolbarLayout()
-            contentView?.needsDisplay = true
+            refreshAllDisplays()
             return true
         }
         return false
@@ -251,7 +332,7 @@ public final class RegionSelectorForm: NSPanel {
         finished = true
         cleanupMonitorsAndCursor()
         chosenAction = scrollMode
-        self.orderOut(nil)
+        closeAllDisplays()
         onComplete?(self)
     }
 
@@ -261,7 +342,7 @@ public final class RegionSelectorForm: NSPanel {
         cleanupMonitorsAndCursor()
         annotatedRegionBitmap = renderSelectedRegionWithAnnotations()
         chosenAction = mode
-        self.orderOut(nil)
+        closeAllDisplays()
         onComplete?(self)
     }
 
@@ -270,7 +351,7 @@ public final class RegionSelectorForm: NSPanel {
         finished = true
         cleanupMonitorsAndCursor()
         chosenAction = .none
-        self.orderOut(nil)
+        closeAllDisplays()
         onComplete?(self)
     }
 
@@ -413,9 +494,41 @@ public final class RegionSelectorForm: NSPanel {
         selectionRect = NSRect(x: left, y: top, width: right - left, height: bottom - top).integral
     }
 
+    fileprivate func localDisplayVirtualRect(forPoint vPt: NSPoint) -> NSRect {
+        let globalPt = CGPoint(
+            x: vPt.x + virtualBoundsTopDown.origin.x,
+            y: vPt.y + virtualBoundsTopDown.origin.y
+        )
+        let scrTopDown = ScreenCapturer.screenTopDownBounds(for: globalPt)
+        return NSRect(
+            x: scrTopDown.origin.x - virtualBoundsTopDown.origin.x,
+            y: scrTopDown.origin.y - virtualBoundsTopDown.origin.y,
+            width: scrTopDown.width,
+            height: scrTopDown.height
+        )
+    }
+
+    fileprivate func localDisplayVirtualRect(forRect vRect: NSRect) -> NSRect {
+        let globalRect = CGRect(
+            x: vRect.origin.x + virtualBoundsTopDown.origin.x,
+            y: vRect.origin.y + virtualBoundsTopDown.origin.y,
+            width: vRect.width,
+            height: vRect.height
+        )
+        if let scr = ScreenCapturer.screenContaining(topDownRect: globalRect) {
+            let scrTopDown = ScreenCapturer.cocoaToTopDown(scr.frame).integral
+            return NSRect(
+                x: scrTopDown.origin.x - virtualBoundsTopDown.origin.x,
+                y: scrTopDown.origin.y - virtualBoundsTopDown.origin.y,
+                width: scrTopDown.width,
+                height: scrTopDown.height
+            )
+        }
+        return localDisplayVirtualRect(forPoint: NSPoint(x: vRect.midX, y: vRect.midY))
+    }
+
     fileprivate func updateToolbarLayout() {
-        let viewW = virtualBoundsTopDown.width
-        let viewH = virtualBoundsTopDown.height
+        let dispBounds = localDisplayVirtualRect(forRect: selectionRect)
 
         let barH: CGFloat = 38
         let pad: CGFloat = 5
@@ -432,16 +545,16 @@ public final class RegionSelectorForm: NSPanel {
                      + iconW * 4 + finishW + gap * 4
 
         var x = selectionRect.maxX - barWidth
-        if x < 8 { x = selectionRect.minX }
-        if x + barWidth > viewW - 8 { x = max(8, viewW - barWidth - 8) }
+        if x < dispBounds.minX + 8 { x = max(dispBounds.minX + 8, selectionRect.minX) }
+        if x + barWidth > dispBounds.maxX - 8 { x = max(dispBounds.minX + 8, dispBounds.maxX - barWidth - 8) }
 
         let totalNeededH = barH + (activeTool != .none ? 42 : 0)
         var y = selectionRect.maxY + 6
         var placedAbove = false
-        if y + totalNeededH > viewH - 8 {
+        if y + totalNeededH > dispBounds.maxY - 8 {
             y = selectionRect.minY - barH - 6
             placedAbove = true
-            if y < 8 {
+            if y < dispBounds.minY + 8 {
                 y = selectionRect.maxY - barH - 6
                 placedAbove = false
             }
@@ -469,7 +582,7 @@ public final class RegionSelectorForm: NSPanel {
         let subH: CGFloat = 34
         let subX = toolbarBounds.minX
         var subY = placedAbove ? (toolbarBounds.minY - subH - 5) : (toolbarBounds.maxY + 5)
-        if subY < 6 { subY = toolbarBounds.maxY + 5 }
+        if subY < dispBounds.minY + 6 { subY = toolbarBounds.maxY + 5 }
 
         subBarBounds = NSRect(x: subX, y: subY, width: subW, height: subH)
 
@@ -488,9 +601,22 @@ public final class RegionSelectorForm: NSPanel {
 
     private final class SelectorCanvasView: NSView {
         weak var owner: RegionSelectorForm?
+        var virtualOffset: NSPoint = .zero
 
         override var isFlipped: Bool { true }
         override var acceptsFirstResponder: Bool { true }
+
+        private func virtualPoint(from event: NSEvent) -> NSPoint {
+            let localPt = convert(event.locationInWindow, from: nil)
+            return NSPoint(x: localPt.x + virtualOffset.x, y: localPt.y + virtualOffset.y)
+        }
+
+        private func ensurePanelFocusedIfNeeded() {
+            if let win = self.window, !win.isKeyWindow {
+                win.makeKey()
+                win.makeFirstResponder(self)
+            }
+        }
 
         override func updateTrackingAreas() {
             super.updateTrackingAreas()
@@ -505,11 +631,25 @@ public final class RegionSelectorForm: NSPanel {
 
         override func draw(_ dirtyRect: NSRect) {
             guard let owner = owner else { return }
+            let virtualRect = NSRect(
+                x: 0,
+                y: 0,
+                width: owner.virtualBoundsTopDown.width,
+                height: owner.virtualBoundsTopDown.height
+            )
+            let localScreenVirtualRect = NSRect(origin: virtualOffset, size: bounds.size)
+
+            NSGraphicsContext.saveGraphicsState()
+            defer { NSGraphicsContext.restoreGraphicsState() }
+
+            if let ctx = NSGraphicsContext.current?.cgContext {
+                ctx.translateBy(x: -virtualOffset.x, y: -virtualOffset.y)
+            }
 
             // Draw full-resolution Retina desktop snapshot 1:1 without interpolation blur
             NSGraphicsContext.current?.imageInterpolation = .none
             owner.desktopNSImage.draw(
-                in: bounds,
+                in: virtualRect,
                 from: .zero,
                 operation: .copy,
                 fraction: 1.0,
@@ -519,33 +659,35 @@ public final class RegionSelectorForm: NSPanel {
 
             let dimColor = NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 120 / 255.0)
             if owner.selectionRect.width > 0 && owner.selectionRect.height > 0 {
-                let path = NSBezierPath(rect: bounds)
+                let path = NSBezierPath(rect: virtualRect)
                 path.appendRect(owner.selectionRect)
                 path.windingRule = .evenOdd
                 dimColor.setFill()
                 path.fill()
+            } else if owner.hoverWindowRect.width > 8 && owner.hoverWindowRect.height > 8,
+                      let ctx = NSGraphicsContext.current?.cgContext {
+                // Cut out the hovered macOS window using macOS Tahoe's 14.5pt continuous corner curve
+                let winRadius: CGFloat = 14.5
+                let hoverPath = AppIconRenderer.continuousRoundedRectPath(rect: owner.hoverWindowRect, radius: winRadius)
+                ctx.saveGState()
+                ctx.addRect(virtualRect)
+                ctx.addPath(hoverPath)
+                ctx.setFillColor(dimColor.cgColor)
+                ctx.fillPath(using: .evenOdd)
+                ctx.restoreGState()
+
+                // Draw a single flush 2pt continuous border right on the window edge (0..2pt inside hoverPath)
+                ctx.saveGState()
+                ctx.addPath(hoverPath)
+                ctx.clip()
+                ctx.setStrokeColor(UiTheme.weChatGreen.cgColor)
+                ctx.setLineWidth(4.0) // outer 2pt clipped away -> crisp 2pt inner border flush with hoverPath
+                ctx.addPath(hoverPath)
+                ctx.strokePath()
+                ctx.restoreGState()
             } else {
-                if owner.hoverWindowRect.width > 0 && owner.hoverWindowRect.height > 0 {
-                    let path = NSBezierPath(rect: bounds)
-                    path.appendRect(owner.hoverWindowRect)
-                    path.windingRule = .evenOdd
-                    dimColor.setFill()
-                    path.fill()
-
-                    NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 38 / 255.0).setFill()
-                    owner.hoverWindowRect.fill()
-                } else {
-                    dimColor.setFill()
-                    bounds.fill()
-                }
-            }
-
-            if !owner.hasSelection && !owner.isSelecting && owner.hoverWindowRect.width > 8 && owner.hoverWindowRect.height > 8 {
-                let insetHover = owner.hoverWindowRect.insetBy(dx: 1.5, dy: 1.5)
-                UiTheme.weChatGreen.setStroke()
-                let hp = NSBezierPath(rect: insetHover)
-                hp.lineWidth = 3.0
-                hp.stroke()
+                dimColor.setFill()
+                virtualRect.fill()
             }
 
             if !owner.hasSelection && !owner.isSelecting {
@@ -561,13 +703,18 @@ public final class RegionSelectorForm: NSPanel {
                 let psz = (prompt as NSString).size(withAttributes: [.font: font])
                 let pw = ceil(psz.width) + 28
                 let ph: CGFloat = 34
-                let px = (bounds.width - pw) / 2.0
-                let py: CGFloat = 28
+                let px = floor(localScreenVirtualRect.minX + (localScreenVirtualRect.width - pw) / 2.0)
+                let py: CGFloat = localScreenVirtualRect.minY + 28
                 let promptRect = NSRect(x: px, y: py, width: pw, height: ph)
 
-                UiTheme.fillRoundedRect(promptRect, radius: 6, color: UiTheme.toolbarBg)
-                UiTheme.strokeRoundedRect(promptRect, radius: 6, color: UiTheme.weChatGreen, lineWidth: 1.5)
-                UiTheme.drawCenteredText(prompt, in: promptRect, font: font, color: .white)
+                UiTheme.fillAndStrokeRoundedRect(
+                    promptRect,
+                    radius: 8,
+                    fillColor: UiTheme.toolbarBg,
+                    strokeColor: UiTheme.weChatGreen,
+                    lineWidth: 1.0
+                )
+                UiTheme.drawCenteredText(prompt, in: promptRect, font: font, color: UiTheme.textPrimary)
             }
 
             if owner.selectionRect.width > 0 && owner.selectionRect.height > 0 {
@@ -581,9 +728,10 @@ public final class RegionSelectorForm: NSPanel {
                 }
                 NSGraphicsContext.restoreGraphicsState()
 
+                // Exact pixel-aligned 1pt stroke at inset 0.5pt (zero subpixel ghosting on Retina)
                 UiTheme.weChatGreen.setStroke()
-                let bp = NSBezierPath(rect: owner.selectionRect)
-                bp.lineWidth = 1.5
+                let bp = NSBezierPath(rect: owner.selectionRect.insetBy(dx: 0.5, dy: 0.5))
+                bp.lineWidth = 1.0
                 bp.stroke()
 
                 if owner.annotations.isEmpty && owner.activeTool == .none {
@@ -599,6 +747,7 @@ public final class RegionSelectorForm: NSPanel {
                     drawSquareHandle(x: owner.selectionRect.minX, y: midY)
                 }
 
+                let dispBounds = owner.localDisplayVirtualRect(forRect: owner.selectionRect)
                 let pxW = Int((owner.selectionRect.width * owner.backingScaleX).rounded())
                 let pxH = Int((owner.selectionRect.height * owner.backingScaleY).rounded())
                 let sizeText = String(format: "%d × %d px", pxW, pxH)
@@ -606,14 +755,14 @@ public final class RegionSelectorForm: NSPanel {
                 let tsz = (sizeText as NSString).size(withAttributes: [.font: badgeFont])
                 let bw = ceil(tsz.width) + 12
                 let bh = ceil(tsz.height) + 6
-                let bx = owner.selectionRect.minX
+                let bx = max(dispBounds.minX + 6, min(dispBounds.maxX - bw - 6, owner.selectionRect.minX))
                 var by = owner.selectionRect.minY - bh - 4
-                if by < 6 { by = owner.selectionRect.minY + 4 }
+                if by < dispBounds.minY + 6 { by = owner.selectionRect.minY + 4 }
 
                 let badgeRect = NSRect(x: bx, y: by, width: bw, height: bh)
                 UiTheme.fillRoundedRect(
                     badgeRect,
-                    radius: 3,
+                    radius: 4,
                     color: NSColor(srgbRed: 36 / 255.0, green: 36 / 255.0, blue: 36 / 255.0, alpha: 225 / 255.0)
                 )
                 UiTheme.drawCenteredText(sizeText, in: badgeRect, font: badgeFont, color: .white)
@@ -634,19 +783,26 @@ public final class RegionSelectorForm: NSPanel {
 
         private func drawMagnifierLoupe(owner: RegionSelectorForm) {
             let mp = owner.mousePos
+            let dispBounds = owner.localDisplayVirtualRect(forPoint: mp)
             let loupeW: CGFloat = 118
             let loupeH: CGFloat = 142
             let offset: CGFloat = 20
 
             var lx = mp.x + offset
             var ly = mp.y + offset
-            if lx + loupeW > bounds.width - 8 { lx = mp.x - loupeW - offset }
-            if ly + loupeH > bounds.height - 8 { ly = mp.y - loupeH - offset }
-            lx = max(8, min(bounds.width - loupeW - 8, lx))
-            ly = max(8, min(bounds.height - loupeH - 8, ly))
+            if lx + loupeW > dispBounds.maxX - 8 { lx = mp.x - loupeW - offset }
+            if ly + loupeH > dispBounds.maxY - 8 { ly = mp.y - loupeH - offset }
+            lx = floor(max(dispBounds.minX + 8, min(dispBounds.maxX - loupeW - 8, lx)))
+            ly = floor(max(dispBounds.minY + 8, min(dispBounds.maxY - loupeH - 8, ly)))
 
             let loupeRect = NSRect(x: lx, y: ly, width: loupeW, height: loupeH)
-            UiTheme.fillRoundedRect(loupeRect, radius: 6, color: UiTheme.toolbarBg)
+            UiTheme.fillAndStrokeRoundedRect(
+                loupeRect,
+                radius: 8,
+                fillColor: UiTheme.toolbarBg,
+                strokeColor: UiTheme.toolbarBorder,
+                lineWidth: 1.0
+            )
 
             let scopeH: CGFloat = 94
             let scopeRect = NSRect(x: lx + 4, y: ly + 4, width: loupeW - 8, height: scopeH)
@@ -661,44 +817,51 @@ public final class RegionSelectorForm: NSPanel {
             let cellW = scopeRect.width / CGFloat(gridCols)
             let cellH = scopeRect.height / CGFloat(gridRows)
 
-            NSGraphicsContext.saveGraphicsState()
-            NSBezierPath(roundedRect: scopeRect, xRadius: 4, yRadius: 4).addClip()
+            if let ctx = NSGraphicsContext.current?.cgContext {
+                let scopePath = AppIconRenderer.continuousRoundedRectPath(rect: scopeRect, radius: 5)
+                ctx.saveGState()
+                ctx.addPath(scopePath)
+                ctx.clip()
 
-            for r in 0..<gridRows {
-                let sy = max(0, min(owner.desktopSnapshot.height - 1, centerPxY + (r - halfR)))
-                for c in 0..<gridCols {
-                    let sx = max(0, min(owner.desktopSnapshot.width - 1, centerPxX + (c - halfC)))
-                    let px = owner.desktopSnapshot.getPixel(x: sx, y: sy)
-                    NSColor(
-                        srgbRed: CGFloat(px.r) / 255.0,
-                        green: CGFloat(px.g) / 255.0,
-                        blue: CGFloat(px.b) / 255.0,
-                        alpha: 1.0
-                    ).setFill()
-                    let cellRect = NSRect(
-                        x: scopeRect.origin.x + CGFloat(c) * cellW,
-                        y: scopeRect.origin.y + CGFloat(r) * cellH,
-                        width: ceil(cellW),
-                        height: ceil(cellH)
-                    )
-                    cellRect.fill()
+                for r in 0..<gridRows {
+                    let sy = max(0, min(owner.desktopSnapshot.height - 1, centerPxY + (r - halfR)))
+                    for c in 0..<gridCols {
+                        let sx = max(0, min(owner.desktopSnapshot.width - 1, centerPxX + (c - halfC)))
+                        let px = owner.desktopSnapshot.getPixel(x: sx, y: sy)
+                        NSColor(
+                            srgbRed: CGFloat(px.r) / 255.0,
+                            green: CGFloat(px.g) / 255.0,
+                            blue: CGFloat(px.b) / 255.0,
+                            alpha: 1.0
+                        ).setFill()
+                        let cellRect = NSRect(
+                            x: scopeRect.origin.x + CGFloat(c) * cellW,
+                            y: scopeRect.origin.y + CGFloat(r) * cellH,
+                            width: ceil(cellW),
+                            height: ceil(cellH)
+                        )
+                        cellRect.fill()
+                    }
                 }
+
+                // Crosshair in the center of the loupe
+                let cx = scopeRect.origin.x + CGFloat(halfC) * cellW + cellW * 0.5
+                let cy = scopeRect.origin.y + CGFloat(halfR) * cellH + cellH * 0.5
+                UiTheme.weChatGreen.withAlphaComponent(0.85).setStroke()
+                let chPath = NSBezierPath()
+                chPath.lineWidth = 1.0
+                chPath.move(to: NSPoint(x: scopeRect.minX, y: cy))
+                chPath.line(to: NSPoint(x: scopeRect.maxX, y: cy))
+                chPath.move(to: NSPoint(x: cx, y: scopeRect.minY))
+                chPath.line(to: NSPoint(x: cx, y: scopeRect.maxY))
+                chPath.stroke()
+
+                ctx.setStrokeColor(UiTheme.toolbarBorder.cgColor)
+                ctx.setLineWidth(2.0)
+                ctx.addPath(scopePath)
+                ctx.strokePath()
+                ctx.restoreGState()
             }
-
-            // Crosshair in the center of the loupe
-            let cx = scopeRect.origin.x + CGFloat(halfC) * cellW + cellW * 0.5
-            let cy = scopeRect.origin.y + CGFloat(halfR) * cellH + cellH * 0.5
-            UiTheme.weChatGreen.withAlphaComponent(0.85).setStroke()
-            let chPath = NSBezierPath()
-            chPath.lineWidth = 1.0
-            chPath.move(to: NSPoint(x: scopeRect.minX, y: cy))
-            chPath.line(to: NSPoint(x: scopeRect.maxX, y: cy))
-            chPath.move(to: NSPoint(x: cx, y: scopeRect.minY))
-            chPath.line(to: NSPoint(x: cx, y: scopeRect.maxY))
-            chPath.stroke()
-
-            NSGraphicsContext.restoreGraphicsState()
-            UiTheme.strokeRoundedRect(scopeRect, radius: 4, color: UiTheme.toolbarBorder, lineWidth: 1.0)
 
             // Info footer inside loupe: size/coords + hex color
             let centerRGB = owner.desktopSnapshot.getPixel(x: centerPxX, y: centerPxY)
@@ -717,7 +880,7 @@ public final class RegionSelectorForm: NSPanel {
                 coordStr,
                 in: NSRect(x: lx + 6, y: ly + scopeH + 6, width: loupeW - 12, height: 18),
                 font: infoFont,
-                color: .white
+                color: UiTheme.textPrimary
             )
 
             let swatchRect = NSRect(x: lx + 20, y: ly + scopeH + 26, width: 11, height: 11)
@@ -727,8 +890,13 @@ public final class RegionSelectorForm: NSPanel {
                 blue: CGFloat(centerRGB.b) / 255.0,
                 alpha: 1.0
             )
-            UiTheme.fillRoundedRect(swatchRect, radius: 2, color: swatchColor)
-            UiTheme.strokeRoundedRect(swatchRect, radius: 2, color: .white, lineWidth: 0.8)
+            UiTheme.fillAndStrokeRoundedRect(
+                swatchRect,
+                radius: 2.5,
+                fillColor: swatchColor,
+                strokeColor: UiTheme.borderSubtle,
+                lineWidth: 1.0
+            )
 
             UiTheme.drawCenteredText(
                 hexStr,
@@ -737,8 +905,6 @@ public final class RegionSelectorForm: NSPanel {
                 color: UiTheme.textSecondary,
                 alignment: .left
             )
-
-            UiTheme.strokeRoundedRect(loupeRect, radius: 6, color: UiTheme.toolbarBorder, lineWidth: 1.0)
         }
 
         private func drawSquareHandle(x: CGFloat, y: CGFloat) {
@@ -749,30 +915,33 @@ public final class RegionSelectorForm: NSPanel {
 
         private func drawIconBtnBg(_ rect: NSRect, active: Bool, hovered: Bool) {
             guard active || hovered else { return }
-            let c = active ? NSColor(srgbRed: 72 / 255.0, green: 72 / 255.0, blue: 72 / 255.0, alpha: 1.0) : UiTheme.toolbarHover
-            UiTheme.fillRoundedRect(rect, radius: 3, color: c)
+            let c = active ? UiTheme.toolbarHover : UiTheme.toolbarHover
+            UiTheme.fillRoundedRect(rect, radius: 4, color: c)
         }
 
         private func drawWeChatToolbar(owner: RegionSelectorForm) {
-            UiTheme.fillRoundedRect(owner.toolbarBounds, radius: 4, color: UiTheme.toolbarBg)
-            UiTheme.strokeRoundedRect(owner.toolbarBounds, radius: 4, color: UiTheme.toolbarBorder, lineWidth: 1.0)
+            UiTheme.fillAndStrokeRoundedRect(
+                owner.toolbarBounds,
+                radius: 8,
+                fillColor: UiTheme.toolbarBg,
+                strokeColor: UiTheme.toolbarBorder,
+                lineWidth: 1.0
+            )
 
             let mp = owner.mousePos
+            let iconFg = UiTheme.textPrimary
             drawIconBtnBg(owner.btnRectTool, active: owner.activeTool == .rectangle, hovered: owner.btnRectTool.contains(mp))
-            UiTheme.drawIconRect(btnRect: owner.btnRectTool, color: owner.activeTool == .rectangle ? UiTheme.weChatGreen : .white)
+            UiTheme.drawIconRect(btnRect: owner.btnRectTool, color: owner.activeTool == .rectangle ? UiTheme.weChatGreen : iconFg)
 
             drawIconBtnBg(owner.btnArrowTool, active: owner.activeTool == .arrow, hovered: owner.btnArrowTool.contains(mp))
-            UiTheme.drawIconArrow(btnRect: owner.btnArrowTool, color: owner.activeTool == .arrow ? UiTheme.weChatGreen : .white)
+            UiTheme.drawIconArrow(btnRect: owner.btnArrowTool, color: owner.activeTool == .arrow ? UiTheme.weChatGreen : iconFg)
 
             drawIconBtnBg(owner.btnPenTool, active: owner.activeTool == .pen, hovered: owner.btnPenTool.contains(mp))
-            UiTheme.drawIconPen(btnRect: owner.btnPenTool, color: owner.activeTool == .pen ? UiTheme.weChatGreen : .white)
+            UiTheme.drawIconPen(btnRect: owner.btnPenTool, color: owner.activeTool == .pen ? UiTheme.weChatGreen : iconFg)
 
-            UiTheme.dividerColor.setStroke()
-            let div1X = owner.btnPenTool.maxX + 5
-            let div1 = NSBezierPath()
-            div1.move(to: NSPoint(x: div1X, y: owner.toolbarBounds.minY + 9))
-            div1.line(to: NSPoint(x: div1X, y: owner.toolbarBounds.maxY - 9))
-            div1.stroke()
+            UiTheme.dividerColor.setFill()
+            let div1X = floor(owner.btnPenTool.maxX + 5)
+            NSRect(x: div1X, y: owner.toolbarBounds.minY + 9, width: 1.0, height: owner.toolbarBounds.height - 18).fill()
 
             let tbFont = UiTheme.fontPx(13)
             UiTheme.drawPillButton(
@@ -780,44 +949,41 @@ public final class RegionSelectorForm: NSPanel {
                 text: "纵向长截",
                 baseColor: owner.btnVerticalScroll.contains(mp) ? UiTheme.toolbarHover : .clear,
                 hovered: false,
-                radius: 3,
+                radius: 4,
                 font: tbFont,
-                textColor: .white
+                textColor: iconFg
             )
             UiTheme.drawPillButton(
                 rect: owner.btnHorizontalScroll,
                 text: "横向长截",
                 baseColor: owner.btnHorizontalScroll.contains(mp) ? UiTheme.toolbarHover : .clear,
                 hovered: false,
-                radius: 3,
+                radius: 4,
                 font: tbFont,
-                textColor: .white
+                textColor: iconFg
             )
 
-            UiTheme.dividerColor.setStroke()
-            let div2X = owner.btnHorizontalScroll.maxX + 5
-            let div2 = NSBezierPath()
-            div2.move(to: NSPoint(x: div2X, y: owner.toolbarBounds.minY + 9))
-            div2.line(to: NSPoint(x: div2X, y: owner.toolbarBounds.maxY - 9))
-            div2.stroke()
+            UiTheme.dividerColor.setFill()
+            let div2X = floor(owner.btnHorizontalScroll.maxX + 5)
+            NSRect(x: div2X, y: owner.toolbarBounds.minY + 9, width: 1.0, height: owner.toolbarBounds.height - 18).fill()
 
             let canUndo = !owner.annotations.isEmpty
             drawIconBtnBg(owner.btnUndoTool, active: false, hovered: canUndo && owner.btnUndoTool.contains(mp))
             UiTheme.drawIconUndo(
                 btnRect: owner.btnUndoTool,
-                color: canUndo ? .white : NSColor(srgbRed: 110 / 255.0, green: 110 / 255.0, blue: 110 / 255.0, alpha: 1.0)
+                color: canUndo ? iconFg : UiTheme.textSecondary
             )
 
             drawIconBtnBg(owner.btnPin, active: false, hovered: owner.btnPin.contains(mp))
-            UiTheme.drawIconPin(btnRect: owner.btnPin, color: .white)
+            UiTheme.drawIconPin(btnRect: owner.btnPin, color: iconFg)
 
             drawIconBtnBg(owner.btnSave, active: false, hovered: owner.btnSave.contains(mp))
-            UiTheme.drawIconSave(btnRect: owner.btnSave, color: .white)
+            UiTheme.drawIconSave(btnRect: owner.btnSave, color: iconFg)
 
             drawIconBtnBg(owner.btnCancel, active: false, hovered: owner.btnCancel.contains(mp))
             UiTheme.drawIconClose(
                 btnRect: owner.btnCancel,
-                color: owner.btnCancel.contains(mp) ? UiTheme.accentRed : NSColor(srgbRed: 220 / 255.0, green: 220 / 255.0, blue: 220 / 255.0, alpha: 1.0)
+                color: owner.btnCancel.contains(mp) ? UiTheme.accentRed : UiTheme.textSecondary
             )
 
             drawIconBtnBg(owner.btnCopyFinish, active: false, hovered: owner.btnCopyFinish.contains(mp))
@@ -837,17 +1003,18 @@ public final class RegionSelectorForm: NSPanel {
             else if owner.btnCopyFinish.contains(mp) { tip = "完成 (↩)"; tipTarget = owner.btnCopyFinish }
 
             if let tipText = tip {
+                let dispBounds = owner.localDisplayVirtualRect(forRect: owner.toolbarBounds)
                 let tipFont = UiTheme.fontPx(12)
                 let tsz = (tipText as NSString).size(withAttributes: [.font: tipFont])
                 let tw = ceil(tsz.width) + 12
                 let th: CGFloat = 24
-                let tx = tipTarget.minX + (tipTarget.width - tw) / 2.0
+                let tx = floor(tipTarget.minX + (tipTarget.width - tw) / 2.0)
                 var ty = owner.toolbarBounds.minY - th - 4
-                if ty < 4 { ty = owner.toolbarBounds.maxY + 4 }
+                if ty < dispBounds.minY + 4 { ty = owner.toolbarBounds.maxY + 4 }
                 let tipRect = NSRect(x: tx, y: ty, width: tw, height: th)
                 UiTheme.fillRoundedRect(
                     tipRect,
-                    radius: 3,
+                    radius: 4,
                     color: NSColor(srgbRed: 32 / 255.0, green: 32 / 255.0, blue: 32 / 255.0, alpha: 235 / 255.0)
                 )
                 UiTheme.drawCenteredText(tipText, in: tipRect, font: tipFont, color: .white)
@@ -855,8 +1022,13 @@ public final class RegionSelectorForm: NSPanel {
         }
 
         private func drawWeChatSubBar(owner: RegionSelectorForm) {
-            UiTheme.fillRoundedRect(owner.subBarBounds, radius: 4, color: UiTheme.toolbarBg)
-            UiTheme.strokeRoundedRect(owner.subBarBounds, radius: 4, color: UiTheme.toolbarBorder, lineWidth: 1.0)
+            UiTheme.fillAndStrokeRoundedRect(
+                owner.subBarBounds,
+                radius: 8,
+                fillColor: UiTheme.toolbarBg,
+                strokeColor: UiTheme.toolbarBorder,
+                lineWidth: 1.0
+            )
 
             let dotRadii: [CGFloat] = [4, 7, 10]
             for i in 0..<3 {
@@ -870,19 +1042,22 @@ public final class RegionSelectorForm: NSPanel {
                 NSBezierPath(ovalIn: dotRect).fill()
             }
 
-            UiTheme.dividerColor.setStroke()
-            let divX = owner.thicknessRects[2].maxX + 6
-            let div = NSBezierPath()
-            div.move(to: NSPoint(x: divX, y: owner.subBarBounds.minY + 8))
-            div.line(to: NSPoint(x: divX, y: owner.subBarBounds.maxY - 8))
-            div.stroke()
+            UiTheme.dividerColor.setFill()
+            let divX = floor(owner.thicknessRects[2].maxX + 6)
+            NSRect(x: divX, y: owner.subBarBounds.minY + 8, width: 1.0, height: owner.subBarBounds.height - 16).fill()
 
             for i in 0..<owner.colorSwatchRects.count {
                 let sr = owner.colorSwatchRects[i]
-                UiTheme.fillRoundedRect(sr, radius: 2, color: UiTheme.annotColors[i])
+                UiTheme.fillAndStrokeRoundedRect(
+                    sr,
+                    radius: 3,
+                    fillColor: UiTheme.annotColors[i],
+                    strokeColor: UiTheme.borderSubtle,
+                    lineWidth: 1.0
+                )
                 if owner.selectedColorIndex == i {
                     let outer = sr.insetBy(dx: -2, dy: -2)
-                    UiTheme.strokeRoundedRect(outer, radius: 3, color: .white, lineWidth: 1.5)
+                    UiTheme.strokeRoundedRect(outer, radius: 4, color: UiTheme.textPrimary, lineWidth: 1.5)
                 }
             }
         }
@@ -905,31 +1080,12 @@ public final class RegionSelectorForm: NSPanel {
                     p.stroke()
                 }
             } else if item.tool == .arrow {
-                let dx = item.endPt.x - item.startPt.x
-                let dy = item.endPt.y - item.startPt.y
-                let len = hypot(dx, dy)
-                guard len >= 3.0 else { return }
-
-                item.color.setStroke()
-                item.color.setFill()
-                let p = NSBezierPath()
-                p.lineWidth = strokeW
-                p.lineCapStyle = .round
-                p.move(to: item.startPt)
-                p.line(to: item.endPt)
-                p.stroke()
-
-                let angle = atan2(dy, dx)
-                let headLen = max(9.0, strokeW * 3.5)
-                let wing: CGFloat = .pi / 6.5
-                let a1 = NSPoint(x: item.endPt.x - headLen * cos(angle - wing), y: item.endPt.y - headLen * sin(angle - wing))
-                let a2 = NSPoint(x: item.endPt.x - headLen * cos(angle + wing), y: item.endPt.y - headLen * sin(angle + wing))
-                let head = NSBezierPath()
-                head.move(to: item.endPt)
-                head.line(to: a1)
-                head.line(to: a2)
-                head.close()
-                head.fill()
+                UiTheme.drawAnnotationArrow(
+                    from: item.startPt,
+                    to: item.endPt,
+                    color: item.color,
+                    strokeWidth: strokeW
+                )
             } else if item.tool == .pen && item.penPoints.count >= 2 {
                 item.color.setStroke()
                 let p = NSBezierPath()
@@ -946,14 +1102,16 @@ public final class RegionSelectorForm: NSPanel {
 
         override func rightMouseDown(with event: NSEvent) {
             guard let owner = owner else { return }
-            let pt = convert(event.locationInWindow, from: nil)
+            ensurePanelFocusedIfNeeded()
+            let pt = virtualPoint(from: event)
             owner.mousePos = pt
             owner.handleEscapeAction()
         }
 
         override func mouseDown(with event: NSEvent) {
             guard let owner = owner else { return }
-            let pt = convert(event.locationInWindow, from: nil)
+            ensurePanelFocusedIfNeeded()
+            let pt = virtualPoint(from: event)
             owner.mousePos = pt
 
             if event.clickCount == 2 && owner.hasSelection && owner.selectionRect.contains(pt) {
@@ -965,12 +1123,12 @@ public final class RegionSelectorForm: NSPanel {
                 if owner.activeTool != .none && owner.subBarBounds.contains(pt) {
                     for i in 0..<3 where owner.thicknessRects[i].contains(pt) {
                         owner.selectedThicknessIndex = i
-                        needsDisplay = true
+                        owner.refreshAllDisplays()
                         return
                     }
                     for i in 0..<owner.colorSwatchRects.count where owner.colorSwatchRects[i].contains(pt) {
                         owner.selectedColorIndex = i
-                        needsDisplay = true
+                        owner.refreshAllDisplays()
                         return
                     }
                     return
@@ -980,21 +1138,21 @@ public final class RegionSelectorForm: NSPanel {
                     owner.activeTool = owner.activeTool == .rectangle ? .none : .rectangle
                     owner.updateToolbarLayout()
                     owner.updateCursorForPoint(pt)
-                    needsDisplay = true
+                    owner.refreshAllDisplays()
                     return
                 }
                 if owner.btnArrowTool.contains(pt) {
                     owner.activeTool = owner.activeTool == .arrow ? .none : .arrow
                     owner.updateToolbarLayout()
                     owner.updateCursorForPoint(pt)
-                    needsDisplay = true
+                    owner.refreshAllDisplays()
                     return
                 }
                 if owner.btnPenTool.contains(pt) {
                     owner.activeTool = owner.activeTool == .pen ? .none : .pen
                     owner.updateToolbarLayout()
                     owner.updateCursorForPoint(pt)
-                    needsDisplay = true
+                    owner.refreshAllDisplays()
                     return
                 }
                 if owner.btnVerticalScroll.contains(pt) {
@@ -1007,7 +1165,7 @@ public final class RegionSelectorForm: NSPanel {
                 }
                 if owner.btnUndoTool.contains(pt) {
                     if !owner.annotations.isEmpty { _ = owner.annotations.popLast() }
-                    needsDisplay = true
+                    owner.refreshAllDisplays()
                     return
                 }
                 if owner.btnPin.contains(pt) {
@@ -1058,23 +1216,24 @@ public final class RegionSelectorForm: NSPanel {
             owner.dragStart = pt
             owner.selectionRect = NSRect(origin: pt, size: .zero)
             owner.updateCursorForPoint(pt)
-            needsDisplay = true
+            owner.refreshAllDisplays()
         }
 
         override func mouseMoved(with event: NSEvent) {
             guard let owner = owner else { return }
-            let pt = convert(event.locationInWindow, from: nil)
+            ensurePanelFocusedIfNeeded()
+            let pt = virtualPoint(from: event)
             owner.mousePos = pt
             if !owner.hasSelection && !owner.isSelecting {
                 owner.hoverWindowRect = owner.findHoveredWindowRect(localPt: pt)
             }
             owner.updateCursorForPoint(pt)
-            needsDisplay = true
+            owner.refreshAllDisplays()
         }
 
         override func mouseDragged(with event: NSEvent) {
             guard let owner = owner else { return }
-            let pt = convert(event.locationInWindow, from: nil)
+            let pt = virtualPoint(from: event)
             owner.mousePos = pt
 
             if let drawing = owner.currentDrawingItem {
@@ -1091,25 +1250,25 @@ public final class RegionSelectorForm: NSPanel {
                         drawing.penPoints.append(clamped)
                     }
                 }
-                needsDisplay = true
+                owner.refreshAllDisplays()
             } else if owner.isSelecting {
                 let x = min(owner.dragStart.x, pt.x)
                 let y = min(owner.dragStart.y, pt.y)
                 let w = abs(pt.x - owner.dragStart.x)
                 let h = abs(pt.y - owner.dragStart.y)
                 owner.selectionRect = NSRect(x: x, y: y, width: w, height: h).integral
-                needsDisplay = true
+                owner.refreshAllDisplays()
             } else if owner.activeDragZone != .none {
                 owner.applyResizeOrMove(pt)
                 owner.updateToolbarLayout()
                 owner.updateCursorForPoint(pt)
-                needsDisplay = true
+                owner.refreshAllDisplays()
             }
         }
 
         override func mouseUp(with event: NSEvent) {
             guard let owner = owner else { return }
-            let pt = convert(event.locationInWindow, from: nil)
+            let pt = virtualPoint(from: event)
             owner.mousePos = pt
 
             if let item = owner.currentDrawingItem {
@@ -1120,7 +1279,7 @@ public final class RegionSelectorForm: NSPanel {
                 if valid {
                     owner.annotations.append(item)
                 }
-                needsDisplay = true
+                owner.refreshAllDisplays()
                 return
             }
 
@@ -1143,12 +1302,12 @@ public final class RegionSelectorForm: NSPanel {
                     owner.selectionRect = .zero
                 }
                 owner.updateCursorForPoint(pt)
-                needsDisplay = true
+                owner.refreshAllDisplays()
             } else if owner.activeDragZone != .none {
                 owner.activeDragZone = .none
                 owner.updateToolbarLayout()
                 owner.updateCursorForPoint(pt)
-                needsDisplay = true
+                owner.refreshAllDisplays()
             }
         }
 

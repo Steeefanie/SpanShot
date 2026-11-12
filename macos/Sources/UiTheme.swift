@@ -3,19 +3,66 @@ import CoreGraphics
 import Foundation
 
 public enum UiTheme {
-    // Apple UI Blue & macOS Dark Mode Palette (1:1 with src/UiTheme.cs)
-    public static let weChatGreen = NSColor(srgbRed: 0 / 255.0, green: 122 / 255.0, blue: 255 / 255.0, alpha: 1.0)      // #007AFF
-    public static let hollowBorderGreen = NSColor(srgbRed: 7 / 255.0, green: 193 / 255.0, blue: 96 / 255.0, alpha: 1.0) // #07C160
-    public static let toolbarBg = NSColor(srgbRed: 44 / 255.0, green: 44 / 255.0, blue: 46 / 255.0, alpha: 1.0)         // #2C2C2E
-    public static let toolbarHover = NSColor(srgbRed: 58 / 255.0, green: 58 / 255.0, blue: 60 / 255.0, alpha: 1.0)      // #3A3A3C
-    public static let toolbarBorder = NSColor(srgbRed: 72 / 255.0, green: 72 / 255.0, blue: 74 / 255.0, alpha: 1.0)     // #48484A
-    public static let dividerColor = NSColor(srgbRed: 72 / 255.0, green: 72 / 255.0, blue: 74 / 255.0, alpha: 1.0)      // #48484A
+    // Dynamic system theme detection (auto-syncs with macOS Light / Dark mode, 1:1 with src/UiTheme.cs)
+    public private(set) static var isDarkMode: Bool = detectSystemDarkMode()
 
-    public static let bgDark = NSColor(srgbRed: 28 / 255.0, green: 28 / 255.0, blue: 30 / 255.0, alpha: 1.0)            // #1C1C1E
-    public static let bgCard = NSColor(srgbRed: 44 / 255.0, green: 44 / 255.0, blue: 46 / 255.0, alpha: 1.0)            // #2C2C2E
-    public static let bgCardHover = NSColor(srgbRed: 58 / 255.0, green: 58 / 255.0, blue: 60 / 255.0, alpha: 1.0)       // #3A3A3C
-    public static let bgPill = NSColor(srgbRed: 58 / 255.0, green: 58 / 255.0, blue: 60 / 255.0, alpha: 1.0)            // #3A3A3C
-    public static let borderSubtle = NSColor(srgbRed: 72 / 255.0, green: 72 / 255.0, blue: 74 / 255.0, alpha: 1.0)      // #48484A
+    public static func refreshSystemTheme() {
+        isDarkMode = detectSystemDarkMode()
+    }
+
+    private static func detectSystemDarkMode() -> Bool {
+        if let app = NSApp {
+            let match = app.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua])
+            return match == .darkAqua
+        }
+        let style = UserDefaults.standard.string(forKey: "AppleInterfaceStyle") ?? ""
+        return style.caseInsensitiveCompare("Dark") == .orderedSame
+    }
+
+    // Primary brand & action accents
+    public static let weChatGreen = NSColor(srgbRed: 0 / 255.0, green: 122 / 255.0, blue: 255 / 255.0, alpha: 1.0)      // #007AFF
+    public static var linkBlue: NSColor {
+        return isDarkMode
+            ? NSColor(srgbRed: 56 / 255.0, green: 152 / 255.0, blue: 255 / 255.0, alpha: 1.0)
+            : NSColor(srgbRed: 0 / 255.0, green: 112 / 255.0, blue: 240 / 255.0, alpha: 1.0)
+    }
+    public static let hollowBorderGreen = NSColor(srgbRed: 7 / 255.0, green: 193 / 255.0, blue: 96 / 255.0, alpha: 1.0) // #07C160
+
+    // Adaptive surface & border tokens (modeled after tokens.css)
+    public static var bgDark: NSColor {
+        return isDarkMode
+            ? NSColor(srgbRed: 17 / 255.0, green: 17 / 255.0, blue: 17 / 255.0, alpha: 1.0)       // #111111
+            : NSColor(srgbRed: 250 / 255.0, green: 250 / 255.0, blue: 250 / 255.0, alpha: 1.0)    // #FAFAFA
+    }
+    public static var toolbarBg: NSColor {
+        return isDarkMode
+            ? NSColor(srgbRed: 29 / 255.0, green: 29 / 255.0, blue: 29 / 255.0, alpha: 1.0)       // #1D1D1D
+            : NSColor(srgbRed: 255 / 255.0, green: 255 / 255.0, blue: 255 / 255.0, alpha: 1.0)    // #FFFFFF
+    }
+    public static var toolbarHover: NSColor {
+        return isDarkMode
+            ? NSColor(srgbRed: 38 / 255.0, green: 38 / 255.0, blue: 38 / 255.0, alpha: 1.0)       // #262626
+            : NSColor(srgbRed: 236 / 255.0, green: 236 / 255.0, blue: 236 / 255.0, alpha: 1.0)    // #ECECEC
+    }
+    public static var toolbarBorder: NSColor {
+        return isDarkMode
+            ? NSColor(srgbRed: 51 / 255.0, green: 51 / 255.0, blue: 51 / 255.0, alpha: 1.0)       // #333333
+            : NSColor(srgbRed: 217 / 255.0, green: 217 / 255.0, blue: 217 / 255.0, alpha: 1.0)    // #D9D9D9
+    }
+    public static var dividerColor: NSColor { return toolbarBorder }
+    public static var bgCard: NSColor {
+        return isDarkMode
+            ? NSColor(srgbRed: 29 / 255.0, green: 29 / 255.0, blue: 29 / 255.0, alpha: 1.0)       // #1D1D1D
+            : NSColor(srgbRed: 243 / 255.0, green: 243 / 255.0, blue: 243 / 255.0, alpha: 1.0)    // #F3F3F3
+    }
+    public static var bgCardHover: NSColor { return toolbarHover }
+    public static var bgPill: NSColor { return bgCard }
+    public static var canvasBg: NSColor {
+        return isDarkMode
+            ? NSColor(srgbRed: 26 / 255.0, green: 26 / 255.0, blue: 26 / 255.0, alpha: 1.0)       // #1A1A1A
+            : NSColor(srgbRed: 243 / 255.0, green: 243 / 255.0, blue: 243 / 255.0, alpha: 1.0)    // #F3F3F3
+    }
+    public static var borderSubtle: NSColor { return toolbarBorder }
 
     public static let accentBlue = NSColor(srgbRed: 0 / 255.0, green: 122 / 255.0, blue: 255 / 255.0, alpha: 1.0)       // #007AFF
     public static let accentTeal = NSColor(srgbRed: 10 / 255.0, green: 132 / 255.0, blue: 255 / 255.0, alpha: 1.0)      // #0A84FF
@@ -23,8 +70,15 @@ public enum UiTheme {
     public static let accentOrange = NSColor(srgbRed: 255 / 255.0, green: 159 / 255.0, blue: 10 / 255.0, alpha: 1.0)    // #FF9F0A
     public static let accentRed = NSColor(srgbRed: 255 / 255.0, green: 69 / 255.0, blue: 58 / 255.0, alpha: 1.0)        // #FF453A
     public static let accentPurple = NSColor(srgbRed: 94 / 255.0, green: 92 / 255.0, blue: 230 / 255.0, alpha: 1.0)     // #5E5CE6
-    public static let textPrimary = NSColor(srgbRed: 245 / 255.0, green: 245 / 255.0, blue: 247 / 255.0, alpha: 1.0)    // #F5F5F7
-    public static let textSecondary = NSColor(srgbRed: 152 / 255.0, green: 152 / 255.0, blue: 157 / 255.0, alpha: 1.0)  // #98989D
+
+    public static var textPrimary: NSColor {
+        return isDarkMode
+            ? NSColor(srgbRed: 238 / 255.0, green: 238 / 255.0, blue: 238 / 255.0, alpha: 1.0)    // #EEEEEE
+            : NSColor(srgbRed: 34 / 255.0, green: 34 / 255.0, blue: 34 / 255.0, alpha: 1.0)       // #222222
+    }
+    public static var textSecondary: NSColor {
+        return NSColor(srgbRed: 136 / 255.0, green: 136 / 255.0, blue: 136 / 255.0, alpha: 1.0)   // #888888
+    }
 
     // Annotation color swatches (Apple System Colors)
     public static let annotColors: [NSColor] = [
@@ -50,25 +104,71 @@ public enum UiTheme {
         )
     }
 
+    public static func adjustHoverFill(_ baseColor: NSColor) -> NSColor {
+        guard let rgb = baseColor.usingColorSpace(.sRGB) else { return baseColor }
+        if rgb.alphaComponent == 0 { return baseColor }
+        let r = Int((rgb.redComponent * 255.0).rounded())
+        let g = Int((rgb.greenComponent * 255.0).rounded())
+        let b = Int((rgb.blueComponent * 255.0).rounded())
+        let lum = r * 2 + g * 5 + b
+        return lum > 600 ? lighten(baseColor, delta: -12) : lighten(baseColor, delta: 16)
+    }
+
     public static func fillRoundedRect(_ rect: NSRect, radius: CGFloat, color: NSColor) {
-        guard rect.width > 0 && rect.height > 0 else { return }
-        color.setFill()
-        let path = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
-        path.fill()
+        guard rect.width > 0 && rect.height > 0, let ctx = NSGraphicsContext.current?.cgContext else { return }
+        ctx.saveGState()
+        ctx.setFillColor(color.cgColor)
+        ctx.addPath(AppIconRenderer.continuousRoundedRectPath(rect: rect, radius: radius))
+        ctx.fillPath()
+        ctx.restoreGState()
     }
 
     public static func strokeRoundedRect(_ rect: NSRect, radius: CGFloat, color: NSColor, lineWidth: CGFloat = 1.0) {
-        guard rect.width > 0 && rect.height > 0 else { return }
-        color.setStroke()
-        let path = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
-        path.lineWidth = lineWidth
-        path.stroke()
+        guard rect.width > 0 && rect.height > 0, let ctx = NSGraphicsContext.current?.cgContext else { return }
+        ctx.saveGState()
+        ctx.setStrokeColor(color.cgColor)
+        ctx.setLineWidth(lineWidth)
+        ctx.addPath(AppIconRenderer.continuousRoundedRectPath(rect: rect, radius: radius))
+        ctx.strokePath()
+        ctx.restoreGState()
     }
 
-    public static func drawCenteredText(_ text: String, in rect: NSRect, font: NSFont, color: NSColor, alignment: NSTextAlignment = .center) {
+    /// Fills and strokes a continuous rounded rectangle by clipping to the outer silhouette so that
+    /// the fill and border share the exact same outer edge with zero corner bleed or double-border ghosting.
+    public static func fillAndStrokeRoundedRect(
+        _ rect: NSRect,
+        radius: CGFloat,
+        fillColor: NSColor,
+        strokeColor: NSColor,
+        lineWidth: CGFloat = 1.0
+    ) {
+        guard rect.width > 0 && rect.height > 0, let ctx = NSGraphicsContext.current?.cgContext else { return }
+        let path = AppIconRenderer.continuousRoundedRectPath(rect: rect, radius: radius)
+        ctx.saveGState()
+        ctx.addPath(path)
+        ctx.clip()
+        ctx.setFillColor(fillColor.cgColor)
+        ctx.fill(rect)
+        if lineWidth > 0 {
+            ctx.setStrokeColor(strokeColor.cgColor)
+            ctx.setLineWidth(lineWidth * 2.0)
+            ctx.addPath(path)
+            ctx.strokePath()
+        }
+        ctx.restoreGState()
+    }
+
+    public static func drawCenteredText(
+        _ text: String,
+        in rect: NSRect,
+        font: NSFont,
+        color: NSColor,
+        alignment: NSTextAlignment = .center,
+        lineBreakMode: NSLineBreakMode = .byClipping
+    ) {
         let style = NSMutableParagraphStyle()
         style.alignment = alignment
-        style.lineBreakMode = .byClipping
+        style.lineBreakMode = lineBreakMode
         let attrs: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: color,
@@ -92,10 +192,10 @@ public enum UiTheme {
         activeBorder: Bool = false,
         radius: CGFloat = 4.0,
         font: NSFont? = nil,
-        textColor: NSColor = .white
+        textColor: NSColor? = nil
     ) {
         guard rect.width > 0 && rect.height > 0 else { return }
-        let fill = hovered ? lighten(baseColor, delta: 18) : baseColor
+        let fill = hovered ? adjustHoverFill(baseColor) : baseColor
         if fill.alphaComponent > 0.01 {
             fillRoundedRect(rect, radius: radius, color: fill)
         }
@@ -103,7 +203,7 @@ public enum UiTheme {
             strokeRoundedRect(rect.insetBy(dx: 1, dy: 1), radius: radius, color: weChatGreen, lineWidth: 1.5)
         }
         let f = font ?? fontPx(13, bold: false)
-        drawCenteredText(text, in: rect, font: f, color: textColor)
+        drawCenteredText(text, in: rect, font: f, color: textColor ?? textPrimary)
     }
 
     // Toolbar Vector Icons (expects flipped view coordinates where y increases downward, matching src/UiTheme.cs)
@@ -254,6 +354,72 @@ public enum UiTheme {
         path.stroke()
     }
 
+    /// Renders a crisp WeChat-style tapered annotation arrow whose shaft terminates inside the arrowhead base (`neckPt`),
+    /// guaranteeing the shaft never protrudes past the sharp arrowhead tip (`endPt`).
+    public static func drawAnnotationArrow(from startPt: NSPoint, to endPt: NSPoint, color: NSColor, strokeWidth: CGFloat) {
+        let dx = endPt.x - startPt.x
+        let dy = endPt.y - startPt.y
+        let len = hypot(dx, dy)
+        guard len >= 3.0 else { return }
+
+        let angle = atan2(dy, dx)
+        let ux = dx / len
+        let uy = dy / len
+        let nx = -uy
+        let ny = ux
+
+        let maxHeadLen = max(11.0, strokeWidth * 3.8)
+        let headLen = min(maxHeadLen, max(6.0, len * 0.8))
+        let wing: CGFloat = .pi / 6.2
+
+        let a1 = NSPoint(
+            x: endPt.x - headLen * cos(angle - wing),
+            y: endPt.y - headLen * sin(angle - wing)
+        )
+        let a2 = NSPoint(
+            x: endPt.x - headLen * cos(angle + wing),
+            y: endPt.y - headLen * sin(angle + wing)
+        )
+        let baseDepth = headLen * cos(wing)
+        let neckDepth = baseDepth * 0.88
+        let neckPt = NSPoint(
+            x: endPt.x - neckDepth * ux,
+            y: endPt.y - neckDepth * uy
+        )
+
+        color.setFill()
+
+        if len > neckDepth + 1.0 {
+            let rStart = max(1.0, strokeWidth * 0.35)
+            let rEnd = max(1.2, strokeWidth * 0.52)
+            let shaft = NSBezierPath()
+            shaft.move(to: NSPoint(x: startPt.x + nx * rStart, y: startPt.y + ny * rStart))
+            shaft.line(to: NSPoint(x: neckPt.x + nx * rEnd, y: neckPt.y + ny * rEnd))
+            shaft.line(to: NSPoint(x: neckPt.x - nx * rEnd, y: neckPt.y - ny * rEnd))
+            shaft.line(to: NSPoint(x: startPt.x - nx * rStart, y: startPt.y - ny * rStart))
+            shaft.close()
+            shaft.fill()
+
+            let tailCap = NSBezierPath(
+                ovalIn: NSRect(
+                    x: startPt.x - rStart,
+                    y: startPt.y - rStart,
+                    width: rStart * 2.0,
+                    height: rStart * 2.0
+                )
+            )
+            tailCap.fill()
+        }
+
+        let head = NSBezierPath()
+        head.move(to: endPt)
+        head.line(to: a1)
+        head.line(to: neckPt)
+        head.line(to: a2)
+        head.close()
+        head.fill()
+    }
+
     public static func copyBitmapToClipboard(_ bmp: RawBitmap) {
         guard let cg = bmp.toCGImage() else { return }
         let rep = NSBitmapImageRep(cgImage: cg)
@@ -276,24 +442,32 @@ public enum UiTheme {
         )
     }
 
-    public static func saveBitmapDialog(_ bmp: RawBitmap, tag: String) {
+    @discardableResult
+    public static func saveBitmapDialog(_ bmp: RawBitmap, tag: String, initialDir: String = "") -> Bool {
         copyBitmapToClipboard(bmp)
         let panel = NSSavePanel()
         panel.allowedFileTypes = ["png", "jpg"]
         panel.canCreateDirectories = true
+        var isDir: ObjCBool = false
+        if !initialDir.isEmpty && FileManager.default.fileExists(atPath: initialDir, isDirectory: &isDir) && isDir.boolValue {
+            panel.directoryURL = URL(fileURLWithPath: initialDir)
+        }
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyyMMdd_HHmmss"
         panel.nameFieldStringValue = "SpanShot_\(tag)_\(formatter.string(from: Date())).png"
         panel.level = .modalPanel
 
+        NSApp.activate(ignoringOtherApps: true)
         if panel.runModal() == .OK, let url = panel.url {
             let isJpg = url.pathExtension.lowercased() == "jpg" || url.pathExtension.lowercased() == "jpeg"
             let data = isJpg ? bmp.jpegData() : bmp.pngData()
             if let data = data {
                 try? data.write(to: url)
                 ToastWindow.showToast(message: "已保存", accent: weChatGreen)
+                return true
             }
         }
+        return false
     }
 }
 
@@ -317,20 +491,28 @@ public final class ToastWindow: NSPanel {
         override var isFlipped: Bool { true }
 
         override func draw(_ dirtyRect: NSRect) {
-            let rect = bounds.insetBy(dx: 1, dy: 1)
-            UiTheme.fillRoundedRect(rect, radius: 6, color: UiTheme.toolbarBg)
-            UiTheme.strokeRoundedRect(rect, radius: 6, color: accent, lineWidth: 1.5)
-            UiTheme.drawCenteredText(message, in: rect, font: UiTheme.fontPx(14), color: .white)
+            NSColor.clear.setFill()
+            bounds.fill()
+            UiTheme.fillAndStrokeRoundedRect(
+                bounds,
+                radius: 10,
+                fillColor: UiTheme.toolbarBg,
+                strokeColor: accent,
+                lineWidth: 1.0
+            )
+            UiTheme.drawCenteredText(message, in: bounds, font: UiTheme.fontPx(12), color: UiTheme.textPrimary)
         }
     }
 
     private init(message: String, accent: NSColor) {
-        let font = UiTheme.fontPx(14)
+        UiTheme.refreshSystemTheme()
+        let font = UiTheme.fontPx(12)
         let textSize = (message as NSString).size(withAttributes: [.font: font])
-        let w = max(180.0, ceil(textSize.width) + 40.0)
-        let h: CGFloat = 40.0
+        let w = max(140.0, ceil(textSize.width) + 32.0)
+        let h: CGFloat = 34.0
 
-        let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let activeScreen = ScreenCapturer.screenContaining(topDownPoint: ScreenCapturer.mouseLocationTopDown()) ?? NSScreen.main
+        let screen = activeScreen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let frame = NSRect(
             x: screen.origin.x + (screen.width - w) / 2.0,
             y: screen.maxY - h - 36.0,
@@ -369,6 +551,13 @@ public final class ToastWindow: NSPanel {
 
     public static func showToast(message: String, accent: NSColor) {
         DispatchQueue.main.async {
+            // Route to inline notice if ResultPreviewForm or MainForm is visible (matching src/UiTheme.cs)
+            if ResultPreviewForm.tryShowInlineNotice(message: message, color: accent) {
+                return
+            }
+            if MainForm.tryShowInlineNotice(message: message, color: accent) {
+                return
+            }
             let toast = ToastWindow(message: message, accent: accent)
             activeToasts.append(toast)
             toast.orderFrontRegardless()

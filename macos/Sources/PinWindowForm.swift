@@ -110,7 +110,8 @@ public final class PinWindowForm: NSPanel {
         self.pinnedBitmap = sourceBitmap.clone()
         self.pinnedNSImage = self.pinnedBitmap.toNSImage()
 
-        let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let activeScreen = ScreenCapturer.screenContaining(topDownPoint: initialTopDownLocation ?? ScreenCapturer.mouseLocationTopDown()) ?? NSScreen.main
+        let screen = activeScreen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let baseLogicalW = pinnedBitmap.logicalWidth
         let baseLogicalH = pinnedBitmap.logicalHeight
         if initialTopDownLocation == nil &&

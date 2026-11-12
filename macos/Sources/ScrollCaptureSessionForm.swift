@@ -40,8 +40,8 @@ internal final class HollowBorderOverlay: NSPanel {
     }
 
     init(topDownTargetRect: CGRect) {
-        let expandedTopDown = topDownTargetRect.insetBy(dx: -borderThickness, dy: -borderThickness)
-        let cocoaFrame = ScreenCapturer.topDownToCocoa(expandedTopDown)
+        let expandedTopDown = topDownTargetRect.integral.insetBy(dx: -borderThickness, dy: -borderThickness).integral
+        let cocoaFrame = ScreenCapturer.topDownToCocoa(expandedTopDown).integral
 
         super.init(
             contentRect: cocoaFrame,
@@ -121,25 +121,30 @@ public final class ScrollCaptureSessionForm: NSPanel {
         override func draw(_ dirtyRect: NSRect) {
             guard let owner = owner else { return }
 
-            let cardRect = bounds.insetBy(dx: 0.5, dy: 0.5)
-            UiTheme.toolbarBg.setFill()
-            cardRect.fill()
+            NSColor.clear.setFill()
+            bounds.fill()
 
-            UiTheme.weChatGreen.setStroke()
-            let borderPath = NSBezierPath(rect: cardRect)
-            borderPath.lineWidth = 1.5
-            borderPath.stroke()
+            UiTheme.fillAndStrokeRoundedRect(
+                bounds,
+                radius: 12,
+                fillColor: UiTheme.toolbarBg,
+                strokeColor: UiTheme.weChatGreen,
+                lineWidth: 1.0
+            )
 
             let pad: CGFloat = 8
             let title = owner.direction == .vertical ? "纵向长截图" : "横向长截图"
             let headerInner = NSRect(x: pad, y: 0, width: bounds.width - pad * 2, height: 32)
-            UiTheme.drawCenteredText(title, in: headerInner, font: UiTheme.fontPx(13, bold: true), color: .white, alignment: .left)
+            UiTheme.drawCenteredText(title, in: headerInner, font: UiTheme.fontPx(13, bold: true), color: UiTheme.textPrimary, alignment: .left)
             UiTheme.drawCenteredText(owner.dimensionText, in: headerInner, font: UiTheme.fontPx(12, bold: false), color: UiTheme.textSecondary, alignment: .right)
 
-            let canvasBg = NSColor(srgbRed: 24 / 255.0, green: 24 / 255.0, blue: 26 / 255.0, alpha: 1.0)
-            let canvasBorder = NSColor(srgbRed: 62 / 255.0, green: 62 / 255.0, blue: 66 / 255.0, alpha: 1.0)
-            UiTheme.fillRoundedRect(owner.previewCanvasRect, radius: 4, color: canvasBg)
-            UiTheme.strokeRoundedRect(owner.previewCanvasRect, radius: 4, color: canvasBorder, lineWidth: 1.0)
+            UiTheme.fillAndStrokeRoundedRect(
+                owner.previewCanvasRect,
+                radius: 5,
+                fillColor: UiTheme.canvasBg,
+                strokeColor: UiTheme.borderSubtle,
+                lineWidth: 1.0
+            )
 
             if let previewImg = owner.latestPreviewImage {
                 let px = owner.previewCanvasRect.origin.x + (owner.previewCanvasRect.width - previewImg.size.width) / 2.0
@@ -162,7 +167,7 @@ public final class ScrollCaptureSessionForm: NSPanel {
                 hovered: owner.btnAutoToggleRect.contains(owner.mousePos),
                 radius: 3,
                 font: btnFont,
-                textColor: owner.autoScrolling ? .black : .white
+                textColor: owner.autoScrolling ? .black : UiTheme.textPrimary
             )
 
             if owner.btnCancelRect.contains(owner.mousePos) {
@@ -170,7 +175,7 @@ public final class ScrollCaptureSessionForm: NSPanel {
             }
             let cancelIconColor = owner.btnCancelRect.contains(owner.mousePos)
                 ? UiTheme.accentRed
-                : NSColor(srgbRed: 220 / 255.0, green: 220 / 255.0, blue: 220 / 255.0, alpha: 1.0)
+                : UiTheme.textSecondary
             UiTheme.drawIconClose(btnRect: owner.btnCancelRect, color: cancelIconColor)
 
             UiTheme.drawPillButton(
@@ -236,6 +241,7 @@ public final class ScrollCaptureSessionForm: NSPanel {
     }
 
     public init(physicalCaptureRect: CGRect, direction: ScrollDirection) {
+        UiTheme.refreshSystemTheme()
         self.captureRectTopDown = physicalCaptureRect.integral
         self.direction = direction
         self.engine = StitchEngine(direction: direction)
@@ -251,8 +257,8 @@ public final class ScrollCaptureSessionForm: NSPanel {
             defer: false
         )
 
-        self.isOpaque = true
-        self.backgroundColor = UiTheme.toolbarBg
+        self.isOpaque = false
+        self.backgroundColor = .clear
         self.level = .statusBar
         self.hasShadow = true
         self.sharingType = .none
@@ -294,8 +300,7 @@ public final class ScrollCaptureSessionForm: NSPanel {
     }
 
     private func positionPanelNearCaptureRect(width: CGFloat, height: CGFloat) {
-        let screenCocoa = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-        let screen = ScreenCapturer.cocoaToTopDown(screenCocoa)
+        let screen = ScreenCapturer.screenVisibleTopDownBounds(for: captureRectTopDown)
         let gap: CGFloat = 10
 
         let clampedY = max(screen.minY + 6, min(screen.maxY - height - 6, captureRectTopDown.maxY - height))

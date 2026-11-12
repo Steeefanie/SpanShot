@@ -2,14 +2,169 @@ import AppKit
 import CoreGraphics
 import Foundation
 
-/// Vector icon renderer for SpanShot:
-/// 1. Full-bleed macOS squircle AppIcon (16x16 up to 1024x1024 for AppIcon.icns and MainForm brand badge)
-/// 2. Crisp monochrome template icon (18x18 pt @2x Retina) for the macOS menu bar NSStatusItem
+/// Vector icon renderer for SpanShot (1:1 port of src/AppIcon.cs adapted to Apple's macOS HIG 824/1024 continuous squircle grid):
+/// 1. Vibrant Apple-Blue gradient continuous superellipse squircle (#24A4FF -> #007AFF -> #004ED2)
+/// 2. Three rounded screenshot viewfinder corner brackets (Top-Left, Top-Right, Bottom-Right)
+/// 3. White open scissors oriented at -45 deg (handles at bottom-left, tapered blades opening toward top-right)
+/// 4. Monochrome template icon (18x18 pt @1x/@2x Retina) for the macOS menu bar NSStatusItem
 public enum AppIconRenderer {
 
+    /// Apple's exact 3-Bezier continuous corner curve (`kCACornerCurveContinuous` superellipse squircle).
+    public static func continuousRoundedRectPath(rect: CGRect, radius: CGFloat) -> CGPath {
+        let minSide = min(rect.width, rect.height)
+        let r = min(radius, minSide * 0.5)
+        guard r > 0.5 else {
+            return CGPath(rect: rect, transform: nil)
+        }
+
+        // Exact Apple continuous corner constants (clamped so d0 never exceeds half side length)
+        let d0 = min(minSide * 0.5, 1.52866483 * r)
+        let c1 = 1.08849296 * r
+        let c2 = 0.86840694 * r
+        let p1x = 0.63149379 * r
+        let p1y = 0.07491139 * r
+        let c3x = 0.37282383 * r
+        let c3y = 0.16905956 * r
+
+        let left = rect.minX
+        let right = rect.maxX
+        let top = rect.minY
+        let bottom = rect.maxY
+
+        let path = CGMutablePath()
+
+        // Start on top edge after top-left corner
+        path.move(to: CGPoint(x: left + d0, y: top))
+
+        // Top edge -> Top-Right corner
+        path.addLine(to: CGPoint(x: right - d0, y: top))
+        path.addCurve(
+            to: CGPoint(x: right - p1x, y: top + p1y),
+            control1: CGPoint(x: right - c1, y: top),
+            control2: CGPoint(x: right - c2, y: top)
+        )
+        path.addCurve(
+            to: CGPoint(x: right - p1y, y: top + p1x),
+            control1: CGPoint(x: right - c3x, y: top + c3y),
+            control2: CGPoint(x: right - c3y, y: top + c3x)
+        )
+        path.addCurve(
+            to: CGPoint(x: right, y: top + d0),
+            control1: CGPoint(x: right, y: top + c2),
+            control2: CGPoint(x: right, y: top + c1)
+        )
+
+        // Right edge -> Bottom-Right corner
+        path.addLine(to: CGPoint(x: right, y: bottom - d0))
+        path.addCurve(
+            to: CGPoint(x: right - p1y, y: bottom - p1x),
+            control1: CGPoint(x: right, y: bottom - c1),
+            control2: CGPoint(x: right, y: bottom - c2)
+        )
+        path.addCurve(
+            to: CGPoint(x: right - p1x, y: bottom - p1y),
+            control1: CGPoint(x: right - c3y, y: bottom - c3x),
+            control2: CGPoint(x: right - c3x, y: bottom - c3y)
+        )
+        path.addCurve(
+            to: CGPoint(x: right - d0, y: bottom),
+            control1: CGPoint(x: right - c2, y: bottom),
+            control2: CGPoint(x: right - c1, y: bottom)
+        )
+
+        // Bottom edge -> Bottom-Left corner
+        path.addLine(to: CGPoint(x: left + d0, y: bottom))
+        path.addCurve(
+            to: CGPoint(x: left + p1x, y: bottom - p1y),
+            control1: CGPoint(x: left + c1, y: bottom),
+            control2: CGPoint(x: left + c2, y: bottom)
+        )
+        path.addCurve(
+            to: CGPoint(x: left + p1y, y: bottom - p1x),
+            control1: CGPoint(x: left + c3x, y: bottom - c3y),
+            control2: CGPoint(x: left + c3y, y: bottom - c3x)
+        )
+        path.addCurve(
+            to: CGPoint(x: left, y: bottom - d0),
+            control1: CGPoint(x: left, y: bottom - c2),
+            control2: CGPoint(x: left, y: bottom - c1)
+        )
+
+        // Left edge -> Top-Left corner
+        path.addLine(to: CGPoint(x: left, y: top + d0))
+        path.addCurve(
+            to: CGPoint(x: left + p1y, y: top + p1x),
+            control1: CGPoint(x: left, y: top + c1),
+            control2: CGPoint(x: left, y: top + c2)
+        )
+        path.addCurve(
+            to: CGPoint(x: left + p1x, y: top + p1y),
+            control1: CGPoint(x: left + c3y, y: top + c3x),
+            control2: CGPoint(x: left + c3x, y: top + c3y)
+        )
+        path.addCurve(
+            to: CGPoint(x: left + d0, y: top),
+            control1: CGPoint(x: left + c2, y: top),
+            control2: CGPoint(x: left + c1, y: top)
+        )
+
+        path.closeSubpath()
+        return path
+    }
+
     /// Renders the macOS squircle application icon at the requested pixel dimension.
-    public static func renderAppIconBitmap(pixelSize: Int) -> NSBitmapImageRep? {
-        let s = CGFloat(max(16, pixelSize))
+    /// - Parameter useSystemGridMargin: When `true` (default for `.icns`), uses Apple's 824/1024 HIG icon grid margin (`9.765%`).
+    ///   When `false` (for inline header icon in `MainForm`), uses minimal padding (`2%`).
+    public static func renderAppIconBitmap(pixelSize: Int, useSystemGridMargin: Bool = true) -> NSBitmapImageRep? {
+        let targetPx = max(16, pixelSize)
+        let renderPx = targetPx < 64 ? targetPx * 4 : targetPx
+        let compactMode = targetPx <= 24
+
+        guard let hiRes = renderCoreBitmap(
+            pixelSize: renderPx,
+            compactTrayMode: compactMode,
+            useSystemGridMargin: useSystemGridMargin
+        ) else {
+            return nil
+        }
+        if renderPx == targetPx {
+            return hiRes
+        }
+
+        guard let outRep = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: targetPx,
+            pixelsHigh: targetPx,
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: targetPx * 4,
+            bitsPerPixel: 32
+        ) else {
+            return hiRes
+        }
+
+        NSGraphicsContext.saveGraphicsState()
+        if let gctx = NSGraphicsContext(bitmapImageRep: outRep),
+           let cgImg = hiRes.cgImage {
+            NSGraphicsContext.current = gctx
+            let ctx = gctx.cgContext
+            ctx.setAllowsAntialiasing(true)
+            ctx.setShouldAntialias(true)
+            ctx.interpolationQuality = .high
+            ctx.draw(cgImg, in: CGRect(x: 0, y: 0, width: targetPx, height: targetPx))
+        }
+        NSGraphicsContext.restoreGraphicsState()
+        return outRep
+    }
+
+    private static func renderCoreBitmap(
+        pixelSize: Int,
+        compactTrayMode: Bool,
+        useSystemGridMargin: Bool
+    ) -> NSBitmapImageRep? {
         guard let rep = NSBitmapImageRep(
             bitmapDataPlanes: nil,
             pixelsWide: pixelSize,
@@ -37,27 +192,33 @@ public enum AppIconRenderer {
         ctx.setShouldAntialias(true)
         ctx.interpolationQuality = .high
 
-        // Flip to top-down coordinates (0,0 at top-left, s,s at bottom-right)
-        ctx.translateBy(x: 0, y: s)
+        let sizeF = CGFloat(pixelSize)
+        // Flip to top-down coordinates (0,0 at top-left, sizeF,sizeF at bottom-right)
+        ctx.translateBy(x: 0, y: sizeF)
         ctx.scaleBy(x: 1.0, y: -1.0)
 
-        drawAppIconInTopDownContext(ctx: ctx, size: s)
+        drawAppIconInTopDownContext(
+            ctx: ctx,
+            size: sizeF,
+            compactTrayMode: compactTrayMode,
+            useSystemGridMargin: useSystemGridMargin
+        )
 
         NSGraphicsContext.restoreGraphicsState()
         return rep
     }
 
-    public static func renderAppIconImage(pointSize: CGFloat) -> NSImage {
+    public static func renderAppIconImage(pointSize: CGFloat, useSystemGridMargin: Bool = false) -> NSImage {
         let px = max(32, Int((pointSize * 2.0).rounded()))
         let img = NSImage(size: NSSize(width: pointSize, height: pointSize))
-        if let rep = renderAppIconBitmap(pixelSize: px) {
+        if let rep = renderAppIconBitmap(pixelSize: px, useSystemGridMargin: useSystemGridMargin) {
             rep.size = NSSize(width: pointSize, height: pointSize)
             img.addRepresentation(rep)
         }
         return img
     }
 
-    /// Renders the 18x18 pt (@1x and @2x Retina) template icon for NSStatusBar.
+    /// Renders the 18x18 pt (@1x and @2x Retina) template icon for NSStatusBar using the same viewfinder + scissors motif.
     public static func renderStatusBarTemplateIcon() -> NSImage {
         let ptSize: CGFloat = 18.0
         let img = NSImage(size: NSSize(width: ptSize, height: ptSize))
@@ -84,10 +245,9 @@ public enum AppIconRenderer {
                 let ctx = gctx.cgContext
                 ctx.setAllowsAntialiasing(true)
                 ctx.setShouldAntialias(true)
-                // Scale from 18x18 logical pt space to px space, flipped top-down
                 ctx.translateBy(x: 0, y: CGFloat(px))
-                ctx.scaleBy(x: CGFloat(scale), y: -CGFloat(scale))
-                drawStatusBarVector(ctx: ctx, size: ptSize)
+                ctx.scaleBy(x: 1.0, y: -1.0)
+                drawStatusBarVector(ctx: ctx, size: CGFloat(px))
             }
             NSGraphicsContext.restoreGraphicsState()
             img.addRepresentation(rep)
@@ -98,349 +258,310 @@ public enum AppIconRenderer {
     }
 
     private static func drawStatusBarVector(ctx: CGContext, size: CGFloat) {
-        ctx.setStrokeColor(red: 0, green: 0, blue: 0, alpha: 1.0)
-        ctx.setFillColor(red: 0, green: 0, blue: 0, alpha: 1.0)
-        ctx.setLineCap(.round)
-        ctx.setLineJoin(.round)
+        let s = size / 100.0
+        let fg = CGColor(red: 0, green: 0, blue: 0, alpha: 1.0)
 
-        // 1. Four precision viewfinder corner brackets around (1.8, 1.8) .. (16.2, 16.2)
-        let inset: CGFloat = 1.8
-        let maxC = size - inset
-        let arm: CGFloat = 3.6
-        let r: CGFloat = 1.6
-        ctx.setLineWidth(1.55)
+        let cMargin: CGFloat = 10.5
+        let cArm: CGFloat = 16.0
+        let cRadius: CGFloat = 4.2
+        let cStroke: CGFloat = 6.8 * s
 
-        // Top-Left bracket
-        let tl = CGMutablePath()
-        tl.move(to: CGPoint(x: inset, y: inset + arm))
-        tl.addArc(tangent1End: CGPoint(x: inset, y: inset), tangent2End: CGPoint(x: inset + arm, y: inset), radius: r)
-        tl.addLine(to: CGPoint(x: inset + arm, y: inset))
-        ctx.addPath(tl)
-        ctx.strokePath()
+        drawCornerBracket(ctx: ctx, origin: .zero, s: s, cx: cMargin, cy: cMargin, dirX: 1, dirY: 1, arm: cArm, cornerR: cRadius, strokeWidth: cStroke, color: fg)
+        drawCornerBracket(ctx: ctx, origin: .zero, s: s, cx: 100.0 - cMargin, cy: cMargin, dirX: -1, dirY: 1, arm: cArm, cornerR: cRadius, strokeWidth: cStroke, color: fg)
+        drawCornerBracket(ctx: ctx, origin: .zero, s: s, cx: 100.0 - cMargin, cy: 100.0 - cMargin, dirX: -1, dirY: -1, arm: cArm, cornerR: cRadius, strokeWidth: cStroke, color: fg)
 
-        // Top-Right bracket
-        let tr = CGMutablePath()
-        tr.move(to: CGPoint(x: maxC - arm, y: inset))
-        tr.addArc(tangent1End: CGPoint(x: maxC, y: inset), tangent2End: CGPoint(x: maxC, y: inset + arm), radius: r)
-        tr.addLine(to: CGPoint(x: maxC, y: inset + arm))
-        ctx.addPath(tr)
-        ctx.strokePath()
-
-        // Bottom-Left bracket
-        let bl = CGMutablePath()
-        bl.move(to: CGPoint(x: inset, y: maxC - arm))
-        bl.addArc(tangent1End: CGPoint(x: inset, y: maxC), tangent2End: CGPoint(x: inset + arm, y: maxC), radius: r)
-        bl.addLine(to: CGPoint(x: inset + arm, y: maxC))
-        ctx.addPath(bl)
-        ctx.strokePath()
-
-        // Bottom-Right bracket
-        let br = CGMutablePath()
-        br.move(to: CGPoint(x: maxC - arm, y: maxC))
-        br.addArc(tangent1End: CGPoint(x: maxC, y: maxC), tangent2End: CGPoint(x: maxC, y: maxC - arm), radius: r)
-        br.addLine(to: CGPoint(x: maxC, y: maxC - arm))
-        ctx.addPath(br)
-        ctx.strokePath()
-
-        // 2. Interior stitched horizontal lines + downward scroll arrow
-        ctx.setLineWidth(1.45)
-        // Top row bar
-        ctx.move(to: CGPoint(x: 4.8, y: 5.5))
-        ctx.addLine(to: CGPoint(x: 13.2, y: 5.5))
-        ctx.strokePath()
-
-        // Middle stitch seam line (dashed / split)
-        ctx.move(to: CGPoint(x: 4.8, y: 8.4))
-        ctx.addLine(to: CGPoint(x: 7.4, y: 8.4))
-        ctx.move(to: CGPoint(x: 10.6, y: 8.4))
-        ctx.addLine(to: CGPoint(x: 13.2, y: 8.4))
-        ctx.strokePath()
-
-        // Vertical scroll-stitch arrow in the center-bottom
-        ctx.setLineWidth(1.55)
-        ctx.move(to: CGPoint(x: 9.0, y: 7.4))
-        ctx.addLine(to: CGPoint(x: 9.0, y: 13.6))
-        ctx.move(to: CGPoint(x: 6.7, y: 11.4))
-        ctx.addLine(to: CGPoint(x: 9.0, y: 13.7))
-        ctx.addLine(to: CGPoint(x: 11.3, y: 11.4))
-        ctx.strokePath()
+        drawScissors(
+            ctx: ctx,
+            origin: .zero,
+            s: s,
+            px: 50.0,
+            py: 50.0,
+            k: 1.12,
+            compactTrayMode: true,
+            fgColor: fg,
+            punchOutScrew: true,
+            screwColor: nil
+        )
     }
 
-    private static func drawAppIconInTopDownContext(ctx: CGContext, size s: CGFloat) {
+    private static func drawAppIconInTopDownContext(
+        ctx: CGContext,
+        size: CGFloat,
+        compactTrayMode: Bool,
+        useSystemGridMargin: Bool
+    ) {
         let colorSpace = CGColorSpaceCreateDeviceRGB()
 
-        // macOS Big Sur / Sonoma / Sequoia icon grid: 824/1024 squircle body
-        let pad = s * 0.092
-        let bodyRect = CGRect(x: pad, y: pad, width: s - pad * 2, height: s - pad * 2)
-        let cornerR = bodyRect.width * 0.225
+        // Apple macOS HIG Icon Grid: 824x824 inside 1024x1024 (100/1024 = 9.765625% padding)
+        // Corner curvature 0.262 * badgeSide matches macOS Tahoe continuous squircle mask (diag=163 in 1024x1024)
+        let pad: CGFloat = useSystemGridMargin
+            ? (size * (100.0 / 1024.0))
+            : (size * 0.02)
+        let badgeSide = size - pad * 2.0
+        let radius = badgeSide * 0.262
+        let badgeRect = CGRect(x: pad, y: pad, width: badgeSide, height: badgeSide)
+        let badgePath = continuousRoundedRectPath(rect: badgeRect, radius: radius)
 
-        // Soft drop shadow under squircle (for sizes >= 64)
-        if s >= 64 {
+        // Subtle macOS icon drop shadow when using standard 824/1024 icon grid
+        if useSystemGridMargin && size >= 64 {
             ctx.saveGState()
             ctx.setShadow(
-                offset: CGSize(width: 0, height: s * 0.024),
-                blur: s * 0.045,
-                color: CGColor(red: 0, green: 0, blue: 0, alpha: 0.42)
+                offset: CGSize(width: 0, height: size * (10.0 / 1024.0)),
+                blur: size * (22.0 / 1024.0),
+                color: CGColor(red: 0, green: 0.08, blue: 0.24, alpha: 0.28)
             )
-            let shadowPath = CGPath(roundedRect: bodyRect, cornerWidth: cornerR, cornerHeight: cornerR, transform: nil)
-            ctx.setFillColor(red: 0.05, green: 0.09, blue: 0.18, alpha: 1.0)
-            ctx.addPath(shadowPath)
+            ctx.setFillColor(red: 0.0, green: 0.38, blue: 0.88, alpha: 1.0)
+            ctx.addPath(badgePath)
             ctx.fillPath()
             ctx.restoreGState()
         }
 
-        // Clip to squircle
-        let squirclePath = CGPath(roundedRect: bodyRect, cornerWidth: cornerR, cornerHeight: cornerR, transform: nil)
+        // 1. Vibrant Apple-Blue gradient continuous squircle background (#24A4FF -> #007AFF -> #004ED2)
         ctx.saveGState()
-        ctx.addPath(squirclePath)
+        ctx.addPath(badgePath)
         ctx.clip()
 
-        // 1. Deep multi-stop sapphire-to-cyan gradient background
         let bgColors: [CGFloat] = [
-            0.05, 0.09, 0.19, 1.0, // #0D1730 Deep Navy
-            0.07, 0.18, 0.38, 1.0, // #122E61 Rich Sapphire
-            0.02, 0.44, 0.78, 1.0  // #0570C7 Electric Ocean Blue
+            36.0 / 255.0, 164.0 / 255.0, 255.0 / 255.0, 1.0, // #24A4FF Luminous sky blue
+            0.0 / 255.0, 122.0 / 255.0, 255.0 / 255.0, 1.0,  // #007AFF Signature Apple Blue
+            0.0 / 255.0, 78.0 / 255.0, 210.0 / 255.0, 1.0    // #004ED2 Deep cobalt
         ]
         if let grad = CGGradient(colorSpace: colorSpace, colorComponents: bgColors, locations: [0.0, 0.52, 1.0], count: 3) {
             ctx.drawLinearGradient(
                 grad,
-                start: CGPoint(x: bodyRect.minX, y: bodyRect.minY),
-                end: CGPoint(x: bodyRect.maxX, y: bodyRect.maxY),
+                start: CGPoint(x: badgeRect.minX, y: badgeRect.minY),
+                end: CGPoint(x: badgeRect.maxX, y: badgeRect.maxY),
                 options: [.drawsBeforeStartLocation, .drawsAfterEndLocation]
             )
         }
 
-        // Ambient emerald-cyan glow in center-bottom
-        let glowColors: [CGFloat] = [
-            0.03, 0.78, 0.55, 0.34,
-            0.00, 0.65, 0.95, 0.12,
-            0.00, 0.40, 0.80, 0.00
-        ]
-        if let radial = CGGradient(colorSpace: colorSpace, colorComponents: glowColors, locations: [0.0, 0.55, 1.0], count: 3) {
-            let center = CGPoint(x: s * 0.52, y: s * 0.56)
-            ctx.drawRadialGradient(
-                radial,
-                startCenter: center,
-                startRadius: 0,
-                endCenter: center,
-                endRadius: bodyRect.width * 0.55,
-                options: []
-            )
-        }
-
-        // Subtle background grid lines (precision engineering feel)
-        ctx.saveGState()
-        ctx.setStrokeColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 0.045)
-        ctx.setLineWidth(max(1.0, s * 0.003))
-        let step = bodyRect.width / 6.0
-        for i in 1..<6 {
-            let gx = bodyRect.minX + step * CGFloat(i)
-            ctx.move(to: CGPoint(x: gx, y: bodyRect.minY))
-            ctx.addLine(to: CGPoint(x: gx, y: bodyRect.maxY))
-            let gy = bodyRect.minY + step * CGFloat(i)
-            ctx.move(to: CGPoint(x: bodyRect.minX, y: gy))
-            ctx.addLine(to: CGPoint(x: bodyRect.maxX, y: gy))
-        }
+        // Flush hairline specular edge (stroked on badgePath while clipped to badgePath so zero inset gap occurs)
+        let bs = badgeSide / 100.0
+        ctx.setStrokeColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 42.0 / 255.0)
+        ctx.setLineWidth(max(1.0, 1.6 * bs))
+        ctx.addPath(badgePath)
         ctx.strokePath()
+
         ctx.restoreGState()
 
-        // 2. Central Stitched Document / Table Card (split into Top Frame + Bottom Stitched Frame)
-        let cardW = bodyRect.width * 0.54
-        let cardH = bodyRect.height * 0.62
-        let cardX = (s - cardW) * 0.5
-        let cardY = (s - cardH) * 0.48
-        let cardRect = CGRect(x: cardX, y: cardY, width: cardW, height: cardH)
-        let cardR = cardW * 0.10
+        // All interior graphics are mapped in the 0..100 coordinate space of `badgeRect`
+        let badgeOrigin = badgeRect.origin
 
-        // Card drop shadow
-        ctx.saveGState()
-        ctx.setShadow(
-            offset: CGSize(width: 0, height: s * 0.018),
-            blur: s * 0.035,
-            color: CGColor(red: 0, green: 0, blue: 0, alpha: 0.45)
+        // 2. Screenshot Viewfinder Corner Brackets (Top-Left, Top-Right, Bottom-Right)
+        let cMargin: CGFloat = compactTrayMode ? 14.5 : 16.0
+        let cArm: CGFloat = compactTrayMode ? 13.0 : 13.5
+        let cRadius: CGFloat = 4.2
+        let cStroke: CGFloat = (compactTrayMode ? 5.8 : 5.0) * bs
+        let bracketAlpha: CGFloat = (compactTrayMode ? 240.0 : 228.0) / 255.0
+        let bracketColor = CGColor(red: 1.0, green: 1.0, blue: 1.0, alpha: bracketAlpha)
+
+        // Top-Left corner bracket
+        drawCornerBracket(ctx: ctx, origin: badgeOrigin, s: bs, cx: cMargin, cy: cMargin, dirX: 1, dirY: 1, arm: cArm, cornerR: cRadius, strokeWidth: cStroke, color: bracketColor)
+        // Top-Right corner bracket (target of the scissor jaws)
+        drawCornerBracket(ctx: ctx, origin: badgeOrigin, s: bs, cx: 100.0 - cMargin, cy: cMargin, dirX: -1, dirY: 1, arm: cArm, cornerR: cRadius, strokeWidth: cStroke, color: bracketColor)
+        // Bottom-Right corner bracket
+        drawCornerBracket(ctx: ctx, origin: badgeOrigin, s: bs, cx: 100.0 - cMargin, cy: 100.0 - cMargin, dirX: -1, dirY: -1, arm: cArm, cornerR: cRadius, strokeWidth: cStroke, color: bracketColor)
+
+        // 3. Open Scissors Element (oriented along -45 deg diagonal: handles at bottom-left, blades opening to top-right)
+        let pivotX: CGFloat = 50.2
+        let pivotY: CGFloat = 49.8
+        let scaleFactor: CGFloat = compactTrayMode ? 1.08 : 1.04
+        let whiteColor = CGColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 1.0)
+        let screwColor = CGColor(red: 0.0, green: 88.0 / 255.0, blue: 218.0 / 255.0, alpha: 1.0)
+
+        drawScissors(
+            ctx: ctx,
+            origin: badgeOrigin,
+            s: bs,
+            px: pivotX,
+            py: pivotY,
+            k: scaleFactor,
+            compactTrayMode: compactTrayMode,
+            fgColor: whiteColor,
+            punchOutScrew: false,
+            screwColor: screwColor
         )
-        let cardPath = CGPath(roundedRect: cardRect, cornerWidth: cardR, cornerHeight: cardR, transform: nil)
-        ctx.setFillColor(red: 0.09, green: 0.13, blue: 0.22, alpha: 0.94)
-        ctx.addPath(cardPath)
+    }
+
+    private static func drawCornerBracket(
+        ctx: CGContext,
+        origin: CGPoint,
+        s: CGFloat,
+        cx: CGFloat,
+        cy: CGFloat,
+        dirX: CGFloat,
+        dirY: CGFloat,
+        arm: CGFloat,
+        cornerR: CGFloat,
+        strokeWidth: CGFloat,
+        color: CGColor
+    ) {
+        let p1 = CGPoint(x: origin.x + (cx + dirX * arm) * s, y: origin.y + cy * s)
+        let pCorner1 = CGPoint(x: origin.x + (cx + dirX * cornerR) * s, y: origin.y + cy * s)
+        let pVert = CGPoint(x: origin.x + cx * s, y: origin.y + cy * s)
+        let pCorner2 = CGPoint(x: origin.x + cx * s, y: origin.y + (cy + dirY * cornerR) * s)
+        let p2 = CGPoint(x: origin.x + cx * s, y: origin.y + (cy + dirY * arm) * s)
+
+        let path = CGMutablePath()
+        path.move(to: p1)
+        path.addLine(to: pCorner1)
+        path.addCurve(to: pCorner2, control1: pVert, control2: pVert)
+        path.addLine(to: p2)
+
+        ctx.saveGState()
+        ctx.setStrokeColor(color)
+        ctx.setLineWidth(strokeWidth)
+        ctx.setLineCap(.round)
+        ctx.setLineJoin(.round)
+        ctx.addPath(path)
+        ctx.strokePath()
+        ctx.restoreGState()
+    }
+
+    private static func drawScissors(
+        ctx: CGContext,
+        origin: CGPoint,
+        s: CGFloat,
+        px: CGFloat,
+        py: CGFloat,
+        k: CGFloat,
+        compactTrayMode: Bool,
+        fgColor: CGColor,
+        punchOutScrew: Bool,
+        screwColor: CGColor?
+    ) {
+        let invSqrt2: CGFloat = 0.70710678
+        let ux = invSqrt2
+        let uy = -invSqrt2
+        let vx = invSqrt2
+        let vy = invSqrt2
+
+        drawScissorHalf(ctx: ctx, origin: origin, s: s, px: px, py: py, ux: ux, uy: uy, vx: vx, vy: vy, k: k, sign: -1.0, compactTrayMode: compactTrayMode, fgColor: fgColor)
+        drawScissorHalf(ctx: ctx, origin: origin, s: s, px: px, py: py, ux: ux, uy: uy, vx: vx, vy: vy, k: k, sign: +1.0, compactTrayMode: compactTrayMode, fgColor: fgColor)
+
+        let screwR = (compactTrayMode ? 3.1 : 2.7) * k * s
+        let screwRect = CGRect(
+            x: origin.x + px * s - screwR,
+            y: origin.y + py * s - screwR,
+            width: screwR * 2.0,
+            height: screwR * 2.0
+        )
+
+        ctx.saveGState()
+        if punchOutScrew {
+            ctx.setBlendMode(.clear)
+            ctx.fillEllipse(in: screwRect)
+        } else if let sc = screwColor {
+            ctx.setFillColor(sc)
+            ctx.fillEllipse(in: screwRect)
+        }
+        ctx.restoreGState()
+    }
+
+    private static func drawScissorHalf(
+        ctx: CGContext,
+        origin: CGPoint,
+        s: CGFloat,
+        px: CGFloat,
+        py: CGFloat,
+        ux: CGFloat,
+        uy: CGFloat,
+        vx: CGFloat,
+        vy: CGFloat,
+        k: CGFloat,
+        sign: CGFloat,
+        compactTrayMode: Bool,
+        fgColor: CGColor
+    ) {
+        let alpha = 22.0 * (.pi / 180.0) * sign
+        let cosA = cos(alpha)
+        let sinA = sin(alpha)
+
+        let dx = cosA * ux + sinA * vx
+        let dy = cosA * uy + sinA * vy
+        let nx = sign * (-sinA * ux + cosA * vx)
+        let ny = sign * (-sinA * uy + cosA * vy)
+
+        let tipDist: CGFloat = 33.5 * k
+        let backDist: CGFloat = -5.5 * k
+        let bladeWidth: CGFloat = (compactTrayMode ? 8.6 : 7.8) * k
+        let innerOffset: CGFloat = -1.3 * k
+
+        let innerBack = toScreen(origin: origin, s: s, px: px, py: py, dx: dx, dy: dy, nx: nx, ny: ny, along: backDist, perp: innerOffset)
+        let tip = toScreen(origin: origin, s: s, px: px, py: py, dx: dx, dy: dy, nx: nx, ny: ny, along: tipDist, perp: innerOffset + 0.3 * k)
+        let outerCtrl1 = toScreen(origin: origin, s: s, px: px, py: py, dx: dx, dy: dy, nx: nx, ny: ny, along: tipDist * 0.72, perp: innerOffset + bladeWidth * 0.72)
+        let outerCtrl2 = toScreen(origin: origin, s: s, px: px, py: py, dx: dx, dy: dy, nx: nx, ny: ny, along: tipDist * 0.25, perp: innerOffset + bladeWidth * 1.02)
+        let outerBack = toScreen(origin: origin, s: s, px: px, py: py, dx: dx, dy: dy, nx: nx, ny: ny, along: backDist, perp: innerOffset + bladeWidth * 0.78)
+
+        let bladePath = CGMutablePath()
+        bladePath.move(to: innerBack)
+        bladePath.addLine(to: tip)
+        bladePath.addCurve(to: outerBack, control1: outerCtrl1, control2: outerCtrl2)
+        bladePath.closeSubpath()
+
+        ctx.saveGState()
+        ctx.setFillColor(fgColor)
+        ctx.addPath(bladePath)
         ctx.fillPath()
         ctx.restoreGState()
 
-        // Card content clipped
-        ctx.saveGState()
-        ctx.addPath(cardPath)
-        ctx.clip()
+        let ringU: CGFloat = -20.5 * k
+        let ringV: CGFloat = -sign * 13.8 * k
+        let ringCenterX = origin.x + (px + ringU * ux + ringV * vx) * s
+        let ringCenterY = origin.y + (py + ringU * uy + ringV * vy) * s
 
-        // Top header bar of the table card
-        let headerH = cardH * 0.17
-        ctx.setFillColor(red: 0.14, green: 0.22, blue: 0.38, alpha: 1.0)
-        ctx.fill(CGRect(x: cardRect.minX, y: cardRect.minY, width: cardW, height: headerH))
+        let ringOuterR = (compactTrayMode ? 11.2 : 10.6) * k * s
+        let ringStroke = (compactTrayMode ? 5.6 : 5.0) * k * s
+        let ringMidR = ringOuterR - ringStroke * 0.5
 
-        // Frozen left column highlight (symbolizing SpanShot's 68% sticky column engine)
-        let frozenW = cardW * 0.30
-        ctx.setFillColor(red: 0.11, green: 0.18, blue: 0.31, alpha: 1.0)
-        ctx.fill(CGRect(x: cardRect.minX, y: cardRect.minY + headerH, width: frozenW, height: cardH - headerH))
-
-        // Vertical divider line for frozen column
-        ctx.setStrokeColor(red: 0.22, green: 0.65, blue: 1.0, alpha: 0.45)
-        ctx.setLineWidth(max(1.0, s * 0.005))
-        ctx.move(to: CGPoint(x: cardRect.minX + frozenW, y: cardRect.minY))
-        ctx.addLine(to: CGPoint(x: cardRect.minX + frozenW, y: cardRect.maxY))
-        ctx.strokePath()
-
-        // Skeleton rows inside the card
-        let rowYs: [CGFloat] = [0.27, 0.41, 0.62, 0.76, 0.89]
-        let barH = max(2.0, cardH * 0.055)
-        for (idx, ryFrac) in rowYs.enumerated() {
-            let ry = cardRect.minY + cardH * ryFrac
-            // Left frozen column pill
-            let leftBarRect = CGRect(x: cardRect.minX + cardW * 0.06, y: ry, width: frozenW * 0.62, height: barH)
-            let leftPath = CGPath(roundedRect: leftBarRect, cornerWidth: barH * 0.5, cornerHeight: barH * 0.5, transform: nil)
-            ctx.setFillColor(red: 0.25, green: 0.72, blue: 1.0, alpha: 0.85)
-            ctx.addPath(leftPath)
-            ctx.fillPath()
-
-            // Right scrolling column pills
-            let rightW: CGFloat = (idx % 2 == 0) ? (cardW * 0.48) : (cardW * 0.38)
-            let rightBarRect = CGRect(x: cardRect.minX + frozenW + cardW * 0.06, y: ry, width: rightW, height: barH)
-            let rightPath = CGPath(roundedRect: rightBarRect, cornerWidth: barH * 0.5, cornerHeight: barH * 0.5, transform: nil)
-            ctx.setFillColor(red: 0.85, green: 0.92, blue: 1.0, alpha: idx >= 2 ? 0.90 : 0.65)
-            ctx.addPath(rightPath)
-            ctx.fillPath()
-        }
-
-        // Glowing Emerald Stitch Seam Line across the middle of the card (y = 52%)
-        let seamY = cardRect.minY + cardH * 0.525
-        ctx.saveGState()
-        ctx.setShadow(
-            offset: .zero,
-            blur: s * 0.018,
-            color: CGColor(red: 0.03, green: 0.88, blue: 0.48, alpha: 0.9)
+        let shankStart = CGPoint(x: origin.x + (px - 2.0 * k * dx) * s, y: origin.y + (py - 2.0 * k * dy) * s)
+        let shankMid = CGPoint(
+            x: origin.x + (px + (-10.5 * k) * ux + (-sign * 5.8 * k) * vx) * s,
+            y: origin.y + (py + (-10.5 * k) * uy + (-sign * 5.8 * k) * vy) * s
         )
-        ctx.setStrokeColor(red: 0.04, green: 0.86, blue: 0.48, alpha: 1.0) // #0AD97B
-        ctx.setLineWidth(max(1.5, s * 0.012))
-        ctx.move(to: CGPoint(x: cardRect.minX, y: seamY))
-        ctx.addLine(to: CGPoint(x: cardRect.maxX, y: seamY))
-        ctx.strokePath()
-        ctx.restoreGState()
+        let shankEnd = CGPoint(
+            x: origin.x + (px + (-15.0 * k) * ux + (-sign * 10.5 * k) * vx) * s,
+            y: origin.y + (py + (-15.0 * k) * uy + (-sign * 10.5 * k) * vy) * s
+        )
 
-        ctx.restoreGState() // End card clip
-
-        // Card border stroke
-        ctx.setStrokeColor(red: 0.40, green: 0.75, blue: 1.0, alpha: 0.42)
-        ctx.setLineWidth(max(1.0, s * 0.006))
-        ctx.addPath(cardPath)
-        ctx.strokePath()
-
-        // 3. Four Glowing Viewfinder Corner Brackets around the card
-        let vfPad = s * 0.048
-        let vfRect = cardRect.insetBy(dx: -vfPad, dy: -vfPad)
-        let vfArm = s * 0.085
-        let vfR = s * 0.028
-        let vfStroke = max(2.0, s * 0.022)
+        let shankPath = CGMutablePath()
+        shankPath.move(to: shankStart)
+        shankPath.addCurve(to: shankEnd, control1: shankMid, control2: shankMid)
 
         ctx.saveGState()
-        ctx.setShadow(
-            offset: CGSize(width: 0, height: s * 0.008),
-            blur: s * 0.016,
-            color: CGColor(red: 0, green: 0, blue: 0, alpha: 0.40)
-        )
-        ctx.setStrokeColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 0.96)
-        ctx.setLineWidth(vfStroke)
+        ctx.setStrokeColor(fgColor)
+        ctx.setLineWidth((compactTrayMode ? 5.8 : 5.2) * k * s)
         ctx.setLineCap(.round)
         ctx.setLineJoin(.round)
-
-        // Top-Left
-        let pTL = CGMutablePath()
-        pTL.move(to: CGPoint(x: vfRect.minX, y: vfRect.minY + vfArm))
-        pTL.addArc(tangent1End: CGPoint(x: vfRect.minX, y: vfRect.minY), tangent2End: CGPoint(x: vfRect.minX + vfArm, y: vfRect.minY), radius: vfR)
-        pTL.addLine(to: CGPoint(x: vfRect.minX + vfArm, y: vfRect.minY))
-        ctx.addPath(pTL)
+        ctx.addPath(shankPath)
         ctx.strokePath()
 
-        // Top-Right
-        let pTR = CGMutablePath()
-        pTR.move(to: CGPoint(x: vfRect.maxX - vfArm, y: vfRect.minY))
-        pTR.addArc(tangent1End: CGPoint(x: vfRect.maxX, y: vfRect.minY), tangent2End: CGPoint(x: vfRect.maxX, y: vfRect.minY + vfArm), radius: vfR)
-        pTR.addLine(to: CGPoint(x: vfRect.maxX, y: vfRect.minY + vfArm))
-        ctx.addPath(pTR)
-        ctx.strokePath()
-
-        // Bottom-Left
-        let pBL = CGMutablePath()
-        pBL.move(to: CGPoint(x: vfRect.minX, y: vfRect.maxY - vfArm))
-        pBL.addArc(tangent1End: CGPoint(x: vfRect.minX, y: vfRect.maxY), tangent2End: CGPoint(x: vfRect.minX + vfArm, y: vfRect.maxY), radius: vfR)
-        pBL.addLine(to: CGPoint(x: vfRect.minX + vfArm, y: vfRect.maxY))
-        ctx.addPath(pBL)
-        ctx.strokePath()
-
+        ctx.setLineWidth(ringStroke)
+        ctx.strokeEllipse(in: CGRect(
+            x: ringCenterX - ringMidR,
+            y: ringCenterY - ringMidR,
+            width: ringMidR * 2.0,
+            height: ringMidR * 2.0
+        ))
         ctx.restoreGState()
+    }
 
-        // 4. Emerald Green (#07C160) Scroll-Stitch Badge at Bottom-Right Corner
-        let badgeR = s * 0.135
-        let badgeCenter = CGPoint(x: vfRect.maxX - badgeR * 0.35, y: vfRect.maxY - badgeR * 0.35)
-        let badgeRect = CGRect(
-            x: badgeCenter.x - badgeR,
-            y: badgeCenter.y - badgeR,
-            width: badgeR * 2.0,
-            height: badgeR * 2.0
+    private static func toScreen(
+        origin: CGPoint,
+        s: CGFloat,
+        px: CGFloat,
+        py: CGFloat,
+        dx: CGFloat,
+        dy: CGFloat,
+        nx: CGFloat,
+        ny: CGFloat,
+        along: CGFloat,
+        perp: CGFloat
+    ) -> CGPoint {
+        return CGPoint(
+            x: origin.x + (px + along * dx + perp * nx) * s,
+            y: origin.y + (py + along * dy + perp * ny) * s
         )
-
-        ctx.saveGState()
-        ctx.setShadow(
-            offset: CGSize(width: 0, height: s * 0.012),
-            blur: s * 0.025,
-            color: CGColor(red: 0, green: 0, blue: 0, alpha: 0.45)
-        )
-        let badgeColors: [CGFloat] = [
-            0.06, 0.85, 0.46, 1.0, // #0FD976
-            0.03, 0.68, 0.35, 1.0  // #07AD59
-        ]
-        ctx.addEllipse(in: badgeRect)
-        ctx.clip()
-        if let bGrad = CGGradient(colorSpace: colorSpace, colorComponents: badgeColors, locations: [0.0, 1.0], count: 2) {
-            ctx.drawLinearGradient(
-                bGrad,
-                start: CGPoint(x: badgeRect.minX, y: badgeRect.minY),
-                end: CGPoint(x: badgeRect.maxX, y: badgeRect.maxY),
-                options: []
-            )
-        }
-        ctx.restoreGState()
-
-        // White border around badge
-        ctx.setStrokeColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 0.92)
-        ctx.setLineWidth(max(1.5, s * 0.012))
-        ctx.strokeEllipse(in: badgeRect)
-
-        // Bidirectional scroll-stitch arrow inside badge
-        ctx.saveGState()
-        ctx.setStrokeColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 1.0)
-        ctx.setLineWidth(max(2.0, s * 0.022))
-        ctx.setLineCap(.round)
-        ctx.setLineJoin(.round)
-
-        let arrowSpan = badgeR * 0.52
-        let wing = badgeR * 0.32
-        // Vertical shaft
-        ctx.move(to: CGPoint(x: badgeCenter.x, y: badgeCenter.y - arrowSpan))
-        ctx.addLine(to: CGPoint(x: badgeCenter.x, y: badgeCenter.y + arrowSpan))
-        // Down arrowhead
-        ctx.move(to: CGPoint(x: badgeCenter.x - wing, y: badgeCenter.y + arrowSpan - wing))
-        ctx.addLine(to: CGPoint(x: badgeCenter.x, y: badgeCenter.y + arrowSpan))
-        ctx.addLine(to: CGPoint(x: badgeCenter.x + wing, y: badgeCenter.y + arrowSpan - wing))
-        // Horizontal stitch tick at top of shaft
-        ctx.move(to: CGPoint(x: badgeCenter.x - wing * 0.85, y: badgeCenter.y - arrowSpan * 0.45))
-        ctx.addLine(to: CGPoint(x: badgeCenter.x + wing * 0.85, y: badgeCenter.y - arrowSpan * 0.45))
-        ctx.strokePath()
-        ctx.restoreGState()
-
-        // 5. Outer Squircle Glass Rim Highlight
-        ctx.setStrokeColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 0.24)
-        ctx.setLineWidth(max(1.0, s * 0.008))
-        ctx.addPath(squirclePath)
-        ctx.strokePath()
-
-        ctx.restoreGState() // End squircle clip
     }
 
     /// Generates a complete macOS `.iconset` directory for `/usr/bin/iconutil -c icns`.
@@ -467,7 +588,7 @@ public enum AppIconRenderer {
         ]
 
         for spec in specs {
-            guard let rep = renderAppIconBitmap(pixelSize: spec.pixels),
+            guard let rep = renderAppIconBitmap(pixelSize: spec.pixels, useSystemGridMargin: true),
                   let pngData = rep.representation(using: .png, properties: [:]) else {
                 return false
             }
@@ -479,5 +600,187 @@ public enum AppIconRenderer {
             }
         }
         return true
+    }
+
+    /// Generates @1x (660x400) and @2x (1320x800) DMG installer background PNGs in `outDir`
+    /// so `tiffutil -cathidpicheck` can combine them into a Retina-ready `background.tiff`.
+    public static func generateDmgBackground(at outDir: String) -> Bool {
+        let fm = FileManager.default
+        do {
+            try fm.createDirectory(atPath: outDir, withIntermediateDirectories: true)
+        } catch {
+            return false
+        }
+
+        let logicalW = 660
+        let logicalH = 400
+
+        for scale in [1, 2] {
+            let pxW = logicalW * scale
+            let pxH = logicalH * scale
+            guard let rep = NSBitmapImageRep(
+                bitmapDataPlanes: nil,
+                pixelsWide: pxW,
+                pixelsHigh: pxH,
+                bitsPerSample: 8,
+                samplesPerPixel: 4,
+                hasAlpha: true,
+                isPlanar: false,
+                colorSpaceName: .deviceRGB,
+                bytesPerRow: pxW * 4,
+                bitsPerPixel: 32
+            ) else {
+                return false
+            }
+
+            NSGraphicsContext.saveGraphicsState()
+            guard let gctx = NSGraphicsContext(bitmapImageRep: rep) else {
+                NSGraphicsContext.restoreGraphicsState()
+                return false
+            }
+            NSGraphicsContext.current = gctx
+            let ctx = gctx.cgContext
+            ctx.setAllowsAntialiasing(true)
+            ctx.setShouldAntialias(true)
+            ctx.interpolationQuality = .high
+
+            ctx.translateBy(x: 0, y: CGFloat(pxH))
+            ctx.scaleBy(x: CGFloat(scale), y: -CGFloat(scale))
+
+            drawDmgBackgroundInTopDownContext(ctx: ctx, width: CGFloat(logicalW), height: CGFloat(logicalH))
+
+            NSGraphicsContext.restoreGraphicsState()
+
+            rep.size = NSSize(width: logicalW, height: logicalH)
+
+            guard let pngData = rep.representation(using: .png, properties: [:]) else {
+                return false
+            }
+            let fileName = (scale == 1) ? "bg.png" : "bg@2x.png"
+            let fileURL = URL(fileURLWithPath: outDir).appendingPathComponent(fileName)
+            do {
+                try pngData.write(to: fileURL)
+            } catch {
+                return false
+            }
+        }
+        return true
+    }
+
+    private static func drawDmgBackgroundInTopDownContext(ctx: CGContext, width w: CGFloat, height h: CGFloat) {
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+
+        let bgColors: [CGFloat] = [
+            249.0 / 255.0, 251.0 / 255.0, 255.0 / 255.0, 1.0,
+            238.0 / 255.0, 243.0 / 255.0, 250.0 / 255.0, 1.0
+        ]
+        if let grad = CGGradient(colorSpace: colorSpace, colorComponents: bgColors, locations: [0.0, 1.0], count: 2) {
+            ctx.drawLinearGradient(
+                grad,
+                start: CGPoint(x: w * 0.5, y: 0),
+                end: CGPoint(x: w * 0.5, y: h),
+                options: []
+            )
+        }
+
+        let glowColors: [CGFloat] = [
+            0.0 / 255.0, 122.0 / 255.0, 255.0 / 255.0, 0.11,
+            0.0 / 255.0, 122.0 / 255.0, 255.0 / 255.0, 0.035,
+            0.0 / 255.0, 122.0 / 255.0, 255.0 / 255.0, 0.00
+        ]
+        if let radial = CGGradient(colorSpace: colorSpace, colorComponents: glowColors, locations: [0.0, 0.55, 1.0], count: 3) {
+            for cx in [CGFloat(180.0), CGFloat(480.0)] {
+                let center = CGPoint(x: cx, y: 176.0)
+                ctx.drawRadialGradient(
+                    radial,
+                    startCenter: center,
+                    startRadius: 0,
+                    endCenter: center,
+                    endRadius: 125.0,
+                    options: []
+                )
+            }
+        }
+
+        let arrowY: CGFloat = 172.0
+
+        let chevronXs: [(x: CGFloat, alpha: CGFloat)] = [
+            (288.0, 0.28),
+            (304.0, 0.52)
+        ]
+        for item in chevronXs {
+            ctx.saveGState()
+            ctx.setStrokeColor(red: 0.0, green: 122.0 / 255.0, blue: 255.0 / 255.0, alpha: item.alpha)
+            ctx.setLineWidth(3.6)
+            ctx.setLineCap(.round)
+            ctx.setLineJoin(.round)
+            ctx.move(to: CGPoint(x: item.x - 7.0, y: arrowY - 9.5))
+            ctx.addLine(to: CGPoint(x: item.x + 2.0, y: arrowY))
+            ctx.addLine(to: CGPoint(x: item.x - 7.0, y: arrowY + 9.5))
+            ctx.strokePath()
+            ctx.restoreGState()
+        }
+
+        ctx.saveGState()
+        ctx.setShadow(
+            offset: CGSize(width: 0, height: 3),
+            blur: 8,
+            color: CGColor(red: 0.0, green: 122.0 / 255.0, blue: 255.0 / 255.0, alpha: 0.28)
+        )
+        ctx.setStrokeColor(red: 0.0, green: 122.0 / 255.0, blue: 255.0 / 255.0, alpha: 0.96)
+        ctx.setLineWidth(5.0)
+        ctx.setLineCap(.round)
+        ctx.setLineJoin(.round)
+
+        ctx.move(to: CGPoint(x: 320.0, y: arrowY))
+        ctx.addLine(to: CGPoint(x: 377.0, y: arrowY))
+        ctx.move(to: CGPoint(x: 363.0, y: arrowY - 13.5))
+        ctx.addLine(to: CGPoint(x: 378.0, y: arrowY))
+        ctx.addLine(to: CGPoint(x: 363.0, y: arrowY + 13.5))
+        ctx.strokePath()
+        ctx.restoreGState()
+
+        let pillW: CGFloat = 336.0
+        let pillH: CGFloat = 32.0
+        let pillRect = CGRect(x: (w - pillW) * 0.5, y: 322.0, width: pillW, height: pillH)
+        let pillPath = CGPath(roundedRect: pillRect, cornerWidth: 16.0, cornerHeight: 16.0, transform: nil)
+
+        ctx.saveGState()
+        ctx.setShadow(
+            offset: CGSize(width: 0, height: 2),
+            blur: 6,
+            color: CGColor(red: 0, green: 0, blue: 0, alpha: 0.05)
+        )
+        ctx.setFillColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 0.88)
+        ctx.addPath(pillPath)
+        ctx.fillPath()
+        ctx.restoreGState()
+
+        ctx.saveGState()
+        ctx.setStrokeColor(red: 0.0, green: 122.0 / 255.0, blue: 255.0 / 255.0, alpha: 0.18)
+        ctx.setLineWidth(1.0)
+        ctx.addPath(pillPath)
+        ctx.strokePath()
+        ctx.restoreGState()
+
+        let prevCtx = NSGraphicsContext.current
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: true)
+        let style = NSMutableParagraphStyle()
+        style.alignment = .center
+        let textAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 12.5, weight: .medium),
+            .foregroundColor: NSColor(srgbRed: 68.0 / 255.0, green: 80.0 / 255.0, blue: 98.0 / 255.0, alpha: 1.0),
+            .paragraphStyle: style
+        ]
+        let tip = "将 SpanShot 拖入右侧 Applications 文件夹即可安装" as NSString
+        let tSize = tip.size(withAttributes: textAttrs)
+        let textRect = NSRect(
+            x: pillRect.origin.x,
+            y: pillRect.origin.y + (pillRect.height - tSize.height) * 0.5,
+            width: pillRect.width,
+            height: tSize.height + 2.0
+        )
+        tip.draw(in: textRect, withAttributes: textAttrs)
+        NSGraphicsContext.current = prevCtx
     }
 }

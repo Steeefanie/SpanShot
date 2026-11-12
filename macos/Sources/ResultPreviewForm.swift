@@ -2,7 +2,7 @@ import AppKit
 import CoreGraphics
 import Foundation
 
-/// Result preview & annotation editor window (1:1 port of src/ResultPreviewForm.cs).
+/// Result preview & annotation editor window (1:1 port of src/ResultPreviewForm.cs v1.1.0).
 public final class ResultPreviewForm: NSWindow, NSWindowDelegate {
     private static var activeWindows: [ResultPreviewForm] = []
 
@@ -14,35 +14,42 @@ public final class ResultPreviewForm: NSWindow, NSWindowDelegate {
         case crop
     }
 
-    fileprivate struct OverlayAnnotation {
-        var tool: EditTool
-        var startPt: CGPoint
-        var endPt: CGPoint
-        var penPts: [CGPoint]
-    }
-
     fileprivate var workingBitmap: RawBitmap
     fileprivate var workingNSImage: NSImage
     fileprivate var history: [RawBitmap] = []
     fileprivate let captureTypeTag: String
+    fileprivate let initialSaveDir: String
+
+    public private(set) var manuallySaved: Bool = false
+    public private(set) var confirmedCopy: Bool = false
+    public var finalWorkingBitmap: RawBitmap { return workingBitmap }
 
     fileprivate var currentTool: EditTool = .panBrowse
     fileprivate var fitToWindow: Bool
+
+    fileprivate var noticeText: String = ""
+    fileprivate var noticeColor: NSColor = UiTheme.weChatGreen
+    private var noticeTimer: Timer?
+    private var themeObserver: NSObjectProtocol?
+    private var onCloseCallback: ((ResultPreviewForm) -> Void)?
 
     fileprivate var topBarView: TopBarView!
     fileprivate var scrollView: NSScrollView!
     fileprivate var canvasView: CanvasImageView!
 
-    public init(bitmap: RawBitmap, captureTypeTag: String) {
+    public init(bitmap: RawBitmap, captureTypeTag: String, initialSaveDir: String = "") {
+        UiTheme.refreshSystemTheme()
         self.workingBitmap = bitmap.clone()
         self.workingNSImage = self.workingBitmap.toNSImage()
         self.captureTypeTag = captureTypeTag
+        self.initialSaveDir = initialSaveDir
 
         let isLongOrWide = (Double(workingBitmap.height) > Double(workingBitmap.width) * 1.8) ||
                            (Double(workingBitmap.width) > Double(workingBitmap.height) * 1.8)
         self.fitToWindow = !isLongOrWide
 
-        let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let activeScreen = ScreenCapturer.screenContaining(topDownPoint: ScreenCapturer.mouseLocationTopDown()) ?? NSScreen.main
+        let screen = activeScreen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let w: CGFloat = 960
         let h: CGFloat = 680
         let frame = NSRect(
@@ -59,7 +66,7 @@ public final class ResultPreviewForm: NSWindow, NSWindowDelegate {
             defer: false
         )
 
-        self.appearance = NSAppearance(named: .darkAqua)
+        self.appearance = NSAppearance(named: UiTheme.isDarkMode ? .darkAqua : .aqua)
         self.backgroundColor = UiTheme.bgDark
         self.isReleasedWhenClosed = false
         self.delegate = self
@@ -68,16 +75,65 @@ public final class ResultPreviewForm: NSWindow, NSWindowDelegate {
         updateWindowTitle()
         UiTheme.copyBitmapToClipboard(workingBitmap)
         updateZoomLayout()
+
+        themeObserver = DistributedNotificationCenter.default().addObserver(
+            forName: NSNotification.Name("AppleInterfaceThemeChangedNotification"),
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.applyThemeRefresh()
+        }
     }
 
-    public func showModalOrFloating() {
+    private func applyThemeRefresh() {
+        UiTheme.refreshSystemTheme()
+        self.appearance = NSAppearance(named: UiTheme.isDarkMode ? .darkAqua : .aqua)
+        self.backgroundColor = UiTheme.bgDark
+        self.contentView?.layer?.backgroundColor = UiTheme.bgDark.cgColor
+        scrollView.backgroundColor = UiTheme.canvasBg
+        topBarView.needsDisplay = true
+        canvasView.needsDisplay = true
+    }
+
+    public func showModalOrFloating(onClose: ((ResultPreviewForm) -> Void)? = nil) {
+        self.onCloseCallback = onClose
         ResultPreviewForm.activeWindows.append(self)
         NSApp.activate(ignoringOtherApps: true)
         self.makeKeyAndOrderFront(nil)
     }
 
     public func windowWillClose(_ notification: Notification) {
+        noticeTimer?.invalidate()
+        noticeTimer = nil
+        if let obs = themeObserver {
+            DistributedNotificationCenter.default().removeObserver(obs)
+            themeObserver = nil
+        }
         ResultPreviewForm.activeWindows.removeAll { $0 === self }
+        let cb = onCloseCallback
+        onCloseCallback = nil
+        cb?(self)
+    }
+
+    public static func tryShowInlineNotice(message: String, color: NSColor) -> Bool {
+        for win in activeWindows.reversed() where win.isVisible {
+            win.showInlineNotice(message: message, color: color)
+            return true
+        }
+        return false
+    }
+
+    public func showInlineNotice(message: String, color: NSColor) {
+        noticeText = message
+        noticeColor = color
+        topBarView.needsDisplay = true
+
+        noticeTimer?.invalidate()
+        noticeTimer = Timer.scheduledTimer(withTimeInterval: 2.8, repeats: false) { [weak self] _ in
+            guard let self = self else { return }
+            self.noticeText = ""
+            self.topBarView.needsDisplay = true
+        }
     }
 
     private func setupUI() {
@@ -93,7 +149,7 @@ public final class ResultPreviewForm: NSWindow, NSWindowDelegate {
         scrollView.autoresizingMask = [.width, .height]
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = true
-        scrollView.backgroundColor = NSColor(srgbRed: 20 / 255.0, green: 20 / 255.0, blue: 22 / 255.0, alpha: 1.0)
+        scrollView.backgroundColor = UiTheme.canvasBg
         scrollView.drawsBackground = true
 
         canvasView = CanvasImageView(frame: NSRect(x: 0, y: 0, width: workingBitmap.logicalWidth, height: workingBitmap.logicalHeight))
@@ -175,12 +231,15 @@ public final class ResultPreviewForm: NSWindow, NSWindowDelegate {
     }
 
     fileprivate func saveToFile() {
-        UiTheme.saveBitmapDialog(workingBitmap, tag: captureTypeTag)
+        if UiTheme.saveBitmapDialog(workingBitmap, tag: captureTypeTag, initialDir: initialSaveDir) {
+            manuallySaved = true
+            showInlineNotice(message: "已保存", color: UiTheme.weChatGreen)
+        }
     }
 
     fileprivate func finishAndClose() {
         UiTheme.copyBitmapToClipboard(workingBitmap)
-        ToastWindow.showToast(message: "已复制到剪贴板", accent: UiTheme.weChatGreen)
+        confirmedCopy = true
         self.close()
     }
 
@@ -192,7 +251,9 @@ public final class ResultPreviewForm: NSWindow, NSWindowDelegate {
         } else if event.modifierFlags.contains(.command) || event.modifierFlags.contains(.control) {
             let ch = event.charactersIgnoringModifiers?.lowercased() ?? ""
             if ch == "c" {
-                UiTheme.copyBitmapWithToast(workingBitmap)
+                UiTheme.copyBitmapToClipboard(workingBitmap)
+                confirmedCopy = true
+                showInlineNotice(message: "已复制到剪贴板", color: UiTheme.weChatGreen)
             } else if ch == "s" {
                 saveToFile()
             } else if ch == "z" {
@@ -258,26 +319,55 @@ public final class ResultPreviewForm: NSWindow, NSWindowDelegate {
             UiTheme.toolbarBg.setFill()
             bounds.fill()
 
+            UiTheme.dividerColor.setStroke()
+            let divLine = NSBezierPath()
+            divLine.move(to: NSPoint(x: 0, y: bounds.height - 0.5))
+            divLine.line(to: NSPoint(x: bounds.width, y: bounds.height - 0.5))
+            divLine.lineWidth = 1.0
+            divLine.stroke()
+
             guard let owner = owner else { return }
             let font = UiTheme.fontPx(13)
+            let buttons = buildButtons()
 
-            for btn in buildButtons() {
+            for btn in buttons {
                 let hovered = btn.rect.contains(mousePos)
                 var baseColor = UiTheme.bgPill
-                var textColor = NSColor.white
+                var textColor = UiTheme.textPrimary
 
                 switch btn.id {
-                case "pan": if owner.currentTool == .panBrowse { baseColor = UiTheme.weChatGreen }
-                case "rect": if owner.currentTool == .rectangle { baseColor = UiTheme.weChatGreen }
-                case "arrow": if owner.currentTool == .arrow { baseColor = UiTheme.weChatGreen }
-                case "pen": if owner.currentTool == .pen { baseColor = UiTheme.weChatGreen }
-                case "crop": if owner.currentTool == .crop { baseColor = UiTheme.weChatGreen }
+                case "pan":
+                    if owner.currentTool == .panBrowse {
+                        baseColor = UiTheme.weChatGreen
+                        textColor = .white
+                    }
+                case "rect":
+                    if owner.currentTool == .rectangle {
+                        baseColor = UiTheme.weChatGreen
+                        textColor = .white
+                    }
+                case "arrow":
+                    if owner.currentTool == .arrow {
+                        baseColor = UiTheme.weChatGreen
+                        textColor = .white
+                    }
+                case "pen":
+                    if owner.currentTool == .pen {
+                        baseColor = UiTheme.weChatGreen
+                        textColor = .white
+                    }
+                case "crop":
+                    if owner.currentTool == .crop {
+                        baseColor = UiTheme.weChatGreen
+                        textColor = .white
+                    }
                 case "undo":
                     if owner.history.isEmpty {
                         textColor = UiTheme.textSecondary
                     }
                 case "finish":
                     baseColor = UiTheme.weChatGreen
+                    textColor = .white
                 default:
                     break
                 }
@@ -291,6 +381,25 @@ public final class ResultPreviewForm: NSWindow, NSWindowDelegate {
                     font: font,
                     textColor: textColor
                 )
+            }
+
+            if !owner.noticeText.isEmpty {
+                let lastBtnMaxX = buttons.last?.rect.maxX ?? 680
+                let statusRect = NSRect(
+                    x: lastBtnMaxX + 12,
+                    y: 9,
+                    width: max(0, bounds.width - lastBtnMaxX - 26),
+                    height: 34
+                )
+                if statusRect.width > 40 {
+                    UiTheme.drawCenteredText(
+                        owner.noticeText,
+                        in: statusRect,
+                        font: UiTheme.fontPx(12),
+                        color: owner.noticeColor,
+                        alignment: .right
+                    )
+                }
             }
         }
 
@@ -372,7 +481,7 @@ public final class ResultPreviewForm: NSWindow, NSWindowDelegate {
         }
 
         override func draw(_ dirtyRect: NSRect) {
-            NSColor(srgbRed: 20 / 255.0, green: 20 / 255.0, blue: 22 / 255.0, alpha: 1.0).setFill()
+            UiTheme.canvasBg.setFill()
             bounds.fill()
 
             guard let owner = owner else { return }
@@ -429,32 +538,7 @@ public final class ResultPreviewForm: NSWindow, NSWindowDelegate {
         }
 
         static func drawArrowPath(from p1: NSPoint, to p2: NSPoint, color: NSColor, lineWidth: CGFloat) {
-            let dx = p2.x - p1.x
-            let dy = p2.y - p1.y
-            let len = hypot(dx, dy)
-            guard len >= 3.0 else { return }
-
-            color.setStroke()
-            color.setFill()
-            let path = NSBezierPath()
-            path.lineWidth = lineWidth
-            path.lineCapStyle = .round
-            path.move(to: p1)
-            path.line(to: p2)
-            path.stroke()
-
-            let angle = atan2(dy, dx)
-            let headLen: CGFloat = max(10.0, lineWidth * 3.8)
-            let wingAngle: CGFloat = .pi / 6.5
-            let a1 = NSPoint(x: p2.x - headLen * cos(angle - wingAngle), y: p2.y - headLen * sin(angle - wingAngle))
-            let a2 = NSPoint(x: p2.x - headLen * cos(angle + wingAngle), y: p2.y - headLen * sin(angle + wingAngle))
-
-            let head = NSBezierPath()
-            head.move(to: p2)
-            head.line(to: a1)
-            head.line(to: a2)
-            head.close()
-            head.fill()
+            UiTheme.drawAnnotationArrow(from: p1, to: p2, color: color, strokeWidth: lineWidth)
         }
 
         override func mouseDown(with event: NSEvent) {
