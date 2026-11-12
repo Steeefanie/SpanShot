@@ -375,43 +375,45 @@ public final class RegionSelectorForm: NSPanel {
         let pw = max(1, Int((selectionRect.width * backingScaleX).rounded()))
         let ph = max(1, Int((selectionRect.height * backingScaleY).rounded()))
 
-        var bmp: RawBitmap
-        if isWindowShadowSelectionActive, let winInfo = selectedWindowInfo {
-            let isOccludedByOtherApp = detectedWindows.contains { other in
-                other.zIndex < winInfo.zIndex
-                    && other.ownerPID != winInfo.ownerPID
-                    && !other.boundsTopDown.intersection(winInfo.boundsTopDown).isNull
+        // When capturing a detected window with "Window Capture (Keep corners & shadow)" enabled,
+        // use macOS WindowServer's native ⌘⇧5 window capture (.optionIncludingWindow + .null framing bounds)
+        // so the window's true native rounded corners and genuine system shadow are preserved without edge artifacts.
+        if isWindowShadowSelectionActive,
+           let winInfo = selectedWindowInfo,
+           let nativeWinBmp = ScreenCapturer.captureNativeWindowWithSystemShadow(
+               windowInfo: winInfo,
+               allDetectedWindows: detectedWindows,
+               scale: desktopSnapshot.scaleFactor
+           ) {
+            if !annotations.isEmpty {
+                let scale = max(1.0, nativeWinBmp.scaleFactor)
+                let totalLogicalW = CGFloat(nativeWinBmp.width) / scale
+                let totalLogicalH = CGFloat(nativeWinBmp.height) / scale
+                let padLeftPt = max(0, (totalLogicalW - selectionRect.width) * 0.5)
+                let padTopPt = max(0, (totalLogicalH - selectionRect.height) * 0.36)
+
+                nativeWinBmp.withTopDownCGContext { ctx in
+                    let prev = NSGraphicsContext.current
+                    NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: true)
+                    ctx.scaleBy(x: backingScaleX, y: backingScaleY)
+                    ctx.translateBy(x: padLeftPt - selectionRect.origin.x, y: padTopPt - selectionRect.origin.y)
+                    for item in annotations {
+                        SelectorCanvasView.drawSingleAnnotation(item)
+                    }
+                    NSGraphicsContext.current = prev
+                }
             }
-            if isOccludedByOtherApp,
-               let isolated = ScreenCapturer.captureIndependentWindow(
-                   windowID: winInfo.windowID,
-                   targetPixelWidth: pw,
-                   targetPixelHeight: ph,
-                   scale: desktopSnapshot.scaleFactor
-               ) {
-                bmp = isolated
-            } else {
-                bmp = desktopSnapshot.clone(x: px, y: py, width: pw, height: ph)
-                bmp.scaleFactor = desktopSnapshot.scaleFactor
-            }
-        } else {
-            bmp = desktopSnapshot.clone(x: px, y: py, width: pw, height: ph)
-            bmp.scaleFactor = desktopSnapshot.scaleFactor
+            return nativeWinBmp
         }
+
+        let bmp = desktopSnapshot.clone(x: px, y: py, width: pw, height: ph)
+        bmp.scaleFactor = desktopSnapshot.scaleFactor
 
         if !annotations.isEmpty {
             bmp.withTopDownCGContext { ctx in
                 let prev = NSGraphicsContext.current
                 NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: true)
                 ctx.scaleBy(x: backingScaleX, y: backingScaleY)
-                if isWindowShadowSelectionActive {
-                    let clipPath = AppIconRenderer.continuousRoundedRectPath(
-                        rect: CGRect(x: 0, y: 0, width: selectionRect.width, height: selectionRect.height),
-                        radius: 14.5
-                    )
-                    ctx.addPath(clipPath)
-                    ctx.clip()
-                }
                 ctx.translateBy(x: -selectionRect.origin.x, y: -selectionRect.origin.y)
                 for item in annotations {
                     SelectorCanvasView.drawSingleAnnotation(item)
@@ -420,9 +422,6 @@ public final class RegionSelectorForm: NSPanel {
             }
         }
 
-        if isWindowShadowSelectionActive {
-            return ScreenCapturer.renderWindowWithMacOSShadow(windowBitmap: bmp, cornerRadiusPt: 14.5)
-        }
         return bmp
     }
 

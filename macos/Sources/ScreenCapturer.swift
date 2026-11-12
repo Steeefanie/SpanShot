@@ -490,6 +490,61 @@ public enum ScreenCapturer {
         return getVisibleWindows().map { $0.boundsTopDown }
     }
 
+    /// Captures a window (plus any attached same-app child sheets/popups above it) using macOS WindowServer's
+    /// native `⌘⇧5` window framing (`.null` bounds + `.bestResolution`), preserving the window's exact native
+    /// anti-aliased rounded corners and genuine system drop shadow with zero wallpaper bleed.
+    public static func captureNativeWindowWithSystemShadow(
+        windowInfo: DetectedWindowInfo,
+        allDetectedWindows: [DetectedWindowInfo],
+        scale: CGFloat
+    ) -> RawBitmap? {
+        guard windowInfo.windowID != 0 else { return nil }
+
+        // Collect any frontmost child windows/dialogs belonging to the same process that overlap this window
+        var windowIDs: [CGWindowID] = allDetectedWindows
+            .filter { other in
+                other.zIndex < windowInfo.zIndex
+                    && other.ownerPID == windowInfo.ownerPID
+                    && !other.boundsTopDown.intersection(windowInfo.boundsTopDown).isNull
+            }
+            .sorted { $0.zIndex < $1.zIndex }
+            .map { $0.windowID }
+        windowIDs.append(windowInfo.windowID)
+
+        let cgImg: CGImage?
+        if windowIDs.count == 1 {
+            cgImg = CGWindowListCreateImage(
+                .null,
+                .optionIncludingWindow,
+                windowInfo.windowID,
+                [.bestResolution]
+            )
+        } else {
+            cgImg = CGImage(
+                windowListFromArrayScreenBounds: .null,
+                windowArray: windowIDs as CFArray,
+                imageOption: [.bestResolution]
+            )
+        }
+
+        if let cgImg = cgImg, cgImg.width > 0 && cgImg.height > 0 {
+            return RawBitmap(cgImage: cgImg, scaleFactor: scale)
+        }
+
+        // Fallback if CGWindowListCreateImage is unavailable: ScreenCaptureKit independent window + shadow
+        let pw = max(1, Int((windowInfo.boundsTopDown.width * scale).rounded()))
+        let ph = max(1, Int((windowInfo.boundsTopDown.height * scale).rounded()))
+        if let isolated = captureIndependentWindow(
+            windowID: windowInfo.windowID,
+            targetPixelWidth: pw,
+            targetPixelHeight: ph,
+            scale: scale
+        ) {
+            return renderWindowWithMacOSShadow(windowBitmap: isolated, cornerRadiusPt: 11.5)
+        }
+        return nil
+    }
+
     /// Captures a single isolated window (independent of desktop wallpaper and overlapping windows) via ScreenCaptureKit.
     public static func captureIndependentWindow(
         windowID: CGWindowID,
@@ -509,7 +564,7 @@ public enum ScreenCapturer {
         config.height = max(1, targetPixelHeight)
         config.scalesToFit = true
         config.showsCursor = false
-        config.ignoreShadowsSingleWindow = false
+        config.ignoreShadowsSingleWindow = true
         config.captureResolution = .best
 
         let sem = DispatchSemaphore(value: 0)
@@ -529,11 +584,12 @@ public enum ScreenCapturer {
         return RawBitmap(cgImage: cgImg, scaleFactor: scale)
     }
 
-    /// Composites a window bitmap onto a transparent RGBA canvas with macOS native continuous rounded corners
-    /// and multi-layer soft ambient + contact drop shadows (padding: L=38pt, R=38pt, T=26pt, B=50pt).
+    /// Composites an isolated window bitmap (which already carries its native WindowServer alpha-masked rounded corners)
+    /// onto a transparent RGBA canvas with macOS-grade ambient + contact drop shadows cast directly from the window's
+    /// own native alpha channel (no artificial corner clipping or border stroke).
     public static func renderWindowWithMacOSShadow(
         windowBitmap: RawBitmap,
-        cornerRadiusPt: CGFloat = 14.5
+        cornerRadiusPt: CGFloat = 0.0
     ) -> RawBitmap {
         let scale = max(1.0, windowBitmap.scaleFactor)
         let winLogicalW = CGFloat(windowBitmap.width) / scale
@@ -550,71 +606,40 @@ public enum ScreenCapturer {
         let totalPxH = max(1, Int((totalLogicalH * scale).rounded()))
 
         let out = RawBitmap(width: totalPxW, height: totalPxH, scaleFactor: scale)
+        guard let cgImg = windowBitmap.toCGImage() else { return windowBitmap }
+
         out.withTopDownCGContext { ctx in
             ctx.scaleBy(x: scale, y: scale)
-
+            ctx.interpolationQuality = .high
             let winRect = CGRect(x: padLeftPt, y: padTopPt, width: winLogicalW, height: winLogicalH)
-            let winPath = AppIconRenderer.continuousRoundedRectPath(rect: winRect, radius: cornerRadiusPt)
-            let shadowCastPath = AppIconRenderer.continuousRoundedRectPath(
-                rect: winRect.insetBy(dx: 0.5, dy: 0.5),
-                radius: max(1.0, cornerRadiusPt - 0.5)
-            )
 
-            // 1. Ambient soft Gaussian drop shadow (offset downward by 12pt in base device space)
-            ctx.saveGState()
-            ctx.setShadow(
-                offset: CGSize(width: 0, height: -12.0 * scale),
-                blur: 26.0 * scale,
-                color: NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.35).cgColor
-            )
-            ctx.setFillColor(NSColor.black.cgColor)
-            ctx.addPath(shadowCastPath)
-            ctx.fillPath()
-            ctx.restoreGState()
+            // Flip local sub-context for CGContext.draw(_:in:) so the window image is drawn right-side-up
+            let drawWindowImage = {
+                ctx.saveGState()
+                ctx.translateBy(x: winRect.minX, y: winRect.maxY)
+                ctx.scaleBy(x: 1.0, y: -1.0)
+                ctx.draw(cgImg, in: CGRect(x: 0, y: 0, width: winLogicalW, height: winLogicalH))
+                ctx.restoreGState()
+            }
 
-            // 2. Crisp contact shadow immediately beneath the window edge
+            // 1. Crisp contact shadow cast directly from the window's native alpha mask
             ctx.saveGState()
             ctx.setShadow(
                 offset: CGSize(width: 0, height: -2.0 * scale),
                 blur: 5.0 * scale,
-                color: NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.17).cgColor
+                color: NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.18).cgColor
             )
-            ctx.setFillColor(NSColor.black.cgColor)
-            ctx.addPath(shadowCastPath)
-            ctx.fillPath()
+            drawWindowImage()
             ctx.restoreGState()
 
-            // 3. Subtle 1px outer rim around the window perimeter for light-on-light edge definition
+            // 2. Ambient soft Gaussian drop shadow + crisp native window pixels on top
             ctx.saveGState()
-            ctx.addRect(CGRect(x: 0, y: 0, width: totalLogicalW, height: totalLogicalH))
-            ctx.addPath(winPath)
-            ctx.clip(using: .evenOdd)
-            ctx.setStrokeColor(NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.12).cgColor)
-            ctx.setLineWidth(1.5)
-            ctx.addPath(winPath)
-            ctx.strokePath()
-            ctx.restoreGState()
-
-            // 4. Clear shadow caster inside window bounds, then clip to continuous rounded corners and draw window
-            ctx.saveGState()
-            ctx.addPath(winPath)
-            ctx.clip()
-            ctx.setBlendMode(.clear)
-            ctx.fill(winRect.insetBy(dx: -2.0, dy: -2.0))
-            ctx.setBlendMode(.normal)
-
-            let prev = NSGraphicsContext.current
-            NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: true)
-            NSGraphicsContext.current?.imageInterpolation = .none
-            windowBitmap.toNSImage().draw(
-                in: winRect,
-                from: .zero,
-                operation: .sourceOver,
-                fraction: 1.0,
-                respectFlipped: true,
-                hints: nil
+            ctx.setShadow(
+                offset: CGSize(width: 0, height: -12.0 * scale),
+                blur: 26.0 * scale,
+                color: NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.34).cgColor
             )
-            NSGraphicsContext.current = prev
+            drawWindowImage()
             ctx.restoreGState()
         }
         return out
