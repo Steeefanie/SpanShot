@@ -133,7 +133,7 @@ public final class ScrollCaptureSessionForm: NSPanel {
             )
 
             let pad: CGFloat = 8
-            let title = owner.direction == .vertical ? "纵向长截图" : "横向长截图"
+            let title = owner.direction == .vertical ? L10n.titleVerticalScroll : L10n.titleHorizontalScroll
             let headerInner = NSRect(x: pad, y: 0, width: bounds.width - pad * 2, height: 32)
             UiTheme.drawCenteredText(title, in: headerInner, font: UiTheme.fontPx(13, bold: true), color: UiTheme.textPrimary, alignment: .left)
             UiTheme.drawCenteredText(owner.dimensionText, in: headerInner, font: UiTheme.fontPx(12, bold: false), color: UiTheme.textSecondary, alignment: .right)
@@ -162,7 +162,7 @@ public final class ScrollCaptureSessionForm: NSPanel {
             let btnFont = UiTheme.fontPx(12, bold: false)
             UiTheme.drawPillButton(
                 rect: owner.btnAutoToggleRect,
-                text: owner.autoScrolling ? "暂停" : "自动滚动",
+                text: owner.autoScrolling ? L10n.btnPauseScroll : L10n.btnAutoScroll,
                 baseColor: owner.autoScrolling ? UiTheme.accentOrange : UiTheme.bgPill,
                 hovered: owner.btnAutoToggleRect.contains(owner.mousePos),
                 radius: 3,
@@ -180,7 +180,7 @@ public final class ScrollCaptureSessionForm: NSPanel {
 
             UiTheme.drawPillButton(
                 rect: owner.btnFinishRect,
-                text: "完成",
+                text: L10n.btnDone,
                 baseColor: UiTheme.weChatGreen,
                 hovered: owner.btnFinishRect.contains(owner.mousePos),
                 radius: 3,

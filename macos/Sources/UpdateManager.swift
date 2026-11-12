@@ -15,7 +15,7 @@ public final class UpdateCheckResult {
 
 /// Online update checker and in-app DMG update puller (1:1 port of src/UpdateManager.cs for macOS).
 public enum UpdateManager {
-    public static let currentVersion = "1.1.0"
+    public static let currentVersion = "1.2.0"
     public static let releasesLatestApiUrl = "https://api.github.com/repos/Steeefanie/SpanShot/releases/latest"
     public static let releasesLatestWebUrl = "https://github.com/Steeefanie/SpanShot/releases/latest"
     public static let releasesPageUrl = "https://github.com/Steeefanie/SpanShot/releases"
@@ -39,7 +39,7 @@ public enum UpdateManager {
         let res = UpdateCheckResult()
 
         guard let apiUrl = URL(string: releasesLatestApiUrl) else {
-            res.errorMessage = "检查更新失败"
+            res.errorMessage = L10n.checkUpdateFailedNotice
             return res
         }
 
@@ -94,11 +94,11 @@ public enum UpdateManager {
         }
 
         if let httpStatus = httpResponse?.statusCode, httpStatus == 403 {
-            res.errorMessage = "GitHub 请求受限，请稍后再试"
+            res.errorMessage = L10n.tr("GitHub 请求受限，请稍后再试", "GitHub 請求受限，請稍後再試", "GitHub rate limit exceeded, try again later")
         } else if requestError != nil {
-            res.errorMessage = "网络连接失败，无法访问 GitHub"
+            res.errorMessage = L10n.tr("网络连接失败，无法访问 GitHub", "網路連線失敗，無法存取 GitHub", "Network error, unable to reach GitHub")
         } else {
-            res.errorMessage = "检查更新失败"
+            res.errorMessage = L10n.checkUpdateFailedNotice
         }
         return res
     }
@@ -174,14 +174,14 @@ public enum UpdateManager {
         onCompleted: @escaping (Bool, String) -> Void
     ) {
         if info.downloadUrl.isEmpty {
-            onCompleted(false, "未找到更新包地址")
+            onCompleted(false, L10n.tr("未找到更新包地址", "未找到更新包位址", "Update package URL not found"))
             return
         }
 
         DispatchQueue.global(qos: .utility).async {
             do {
                 guard let url = URL(string: info.downloadUrl) else {
-                    onCompleted(false, "更新包链接无效")
+                    onCompleted(false, L10n.tr("更新包链接无效", "更新包連結無效", "Invalid update package URL"))
                     return
                 }
 
@@ -193,7 +193,7 @@ public enum UpdateManager {
 
                 let ok = downloadFileWithProgress(url: url, destinationPath: dmgPath, onProgress: onProgress)
                 guard ok else {
-                    onCompleted(false, "下载失败，请检查网络连接")
+                    onCompleted(false, L10n.tr("下载失败，请检查网络连接", "下載失敗，請檢查網路連線", "Download failed, check network connection"))
                     return
                 }
 
@@ -201,7 +201,7 @@ public enum UpdateManager {
                       let fileSize = attrs[.size] as? UInt64,
                       fileSize > 50 * 1024 else {
                     try? FileManager.default.removeItem(atPath: dmgPath)
-                    onCompleted(false, "下载的更新包不完整")
+                    onCompleted(false, L10n.tr("下载的更新包不完整", "下載的更新包不完整", "Downloaded update package is incomplete"))
                     return
                 }
 
@@ -214,7 +214,7 @@ public enum UpdateManager {
                     if AppSettings.validateWritableFolder(parentDir),
                        installDmgIntoAppBundle(dmgPath: dmgPath, targetAppPath: bundlePath, tempDir: tempDir) {
                         onProgress(100)
-                        onCompleted(true, "更新完成，正在重启 SpanShot...")
+                        onCompleted(true, L10n.tr("更新完成，正在重启 SpanShot...", "更新完成，正在重啟 SpanShot...", "Update complete, restarting SpanShot..."))
                         return
                     }
                 }
@@ -224,9 +224,9 @@ public enum UpdateManager {
                 DispatchQueue.main.async {
                     NSWorkspace.shared.open(URL(fileURLWithPath: dmgPath))
                 }
-                onCompleted(true, "已下载并打开最新安装包")
+                onCompleted(true, L10n.tr("已下载并打开最新安装包", "已下載並打開最新安裝包", "Downloaded and opened installer"))
             } catch {
-                onCompleted(false, "拉取更新失败")
+                onCompleted(false, L10n.tr("拉取更新失败", "拉取更新失敗", "Failed to download update"))
             }
         }
     }

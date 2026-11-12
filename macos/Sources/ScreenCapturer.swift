@@ -18,6 +18,13 @@ public enum HorizontalScrollMethod: Int {
     case rightArrowKey = 3
 }
 
+public struct DetectedWindowInfo {
+    public let windowID: CGWindowID
+    public let ownerPID: pid_t
+    public let boundsTopDown: CGRect
+    public let zIndex: Int
+}
+
 public enum ScreenCapturer {
     private static let captureQueue = DispatchQueue(label: "com.steeefanie.spanshot.screencapture", qos: .userInteractive)
     private static let cacheLock = NSLock()
@@ -424,24 +431,31 @@ public enum ScreenCapturer {
         return RawBitmap(cgImage: cgImg, scaleFactor: finalScale)
     }
 
-    /// Enumerates visible application windows in top-down global screen coordinates for auto-snapping in RegionSelector.
-    public static func getVisibleWindowRectangles() -> [CGRect] {
-        var list: [CGRect] = []
+    /// Enumerates visible application windows in top-down global screen coordinates (front-to-back Z-order).
+    public static func getVisibleWindows() -> [DetectedWindowInfo] {
+        var list: [DetectedWindowInfo] = []
         let myPID = ProcessInfo.processInfo.processIdentifier
         if let infoList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] {
+            var idx = 0
             for info in infoList {
-                if let ownerPID = info[kCGWindowOwnerPID as String] as? pid_t, ownerPID == myPID {
-                    continue
-                }
+                let ownerPID = (info[kCGWindowOwnerPID as String] as? pid_t) ?? 0
+                if ownerPID == myPID { continue }
                 let layer = (info[kCGWindowLayer as String] as? Int) ?? 0
                 if layer != 0 { continue }
                 let alpha = (info[kCGWindowAlpha as String] as? Double) ?? 1.0
                 if alpha <= 0.05 { continue }
+                let winID = (info[kCGWindowNumber as String] as? CGWindowID) ?? 0
 
                 if let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
                    let rect = CGRect(dictionaryRepresentation: boundsDict) {
                     if rect.width >= 60 && rect.height >= 60 {
-                        list.append(rect.integral)
+                        list.append(DetectedWindowInfo(
+                            windowID: winID,
+                            ownerPID: ownerPID,
+                            boundsTopDown: rect.integral,
+                            zIndex: idx
+                        ))
+                        idx += 1
                     }
                 }
             }
@@ -451,16 +465,159 @@ public enum ScreenCapturer {
         }
 
         if let content = getShareableContent() {
+            var idx = 0
             for win in content.windows {
-                if win.owningApplication?.processID == myPID { continue }
+                let ownerPID = win.owningApplication?.processID ?? 0
+                if ownerPID == myPID { continue }
                 if win.windowLayer != 0 || !win.isOnScreen { continue }
                 let r = win.frame.integral
                 if r.width >= 60 && r.height >= 60 {
-                    list.append(r)
+                    list.append(DetectedWindowInfo(
+                        windowID: win.windowID,
+                        ownerPID: ownerPID,
+                        boundsTopDown: r,
+                        zIndex: idx
+                    ))
+                    idx += 1
                 }
             }
         }
         return list
+    }
+
+    /// Enumerates visible application window rectangles in top-down global screen coordinates for auto-snapping in RegionSelector.
+    public static func getVisibleWindowRectangles() -> [CGRect] {
+        return getVisibleWindows().map { $0.boundsTopDown }
+    }
+
+    /// Captures a single isolated window (independent of desktop wallpaper and overlapping windows) via ScreenCaptureKit.
+    public static func captureIndependentWindow(
+        windowID: CGWindowID,
+        targetPixelWidth: Int,
+        targetPixelHeight: Int,
+        scale: CGFloat
+    ) -> RawBitmap? {
+        guard windowID != 0,
+              let content = getShareableContent(),
+              let scWin = content.windows.first(where: { $0.windowID == windowID }) else {
+            return nil
+        }
+
+        let filter = SCContentFilter(desktopIndependentWindow: scWin)
+        let config = SCStreamConfiguration()
+        config.width = max(1, targetPixelWidth)
+        config.height = max(1, targetPixelHeight)
+        config.scalesToFit = true
+        config.showsCursor = false
+        config.ignoreShadowsSingleWindow = false
+        config.captureResolution = .best
+
+        let sem = DispatchSemaphore(value: 0)
+        var capturedImage: CGImage?
+
+        captureQueue.async {
+            SCScreenshotManager.captureImage(contentFilter: filter, configuration: config) { cgImg, _ in
+                capturedImage = cgImg
+                sem.signal()
+            }
+        }
+        _ = sem.wait(timeout: .now() + 2.0)
+
+        guard let cgImg = capturedImage, cgImg.width > 0 && cgImg.height > 0 else {
+            return nil
+        }
+        return RawBitmap(cgImage: cgImg, scaleFactor: scale)
+    }
+
+    /// Composites a window bitmap onto a transparent RGBA canvas with macOS native continuous rounded corners
+    /// and multi-layer soft ambient + contact drop shadows (padding: L=38pt, R=38pt, T=26pt, B=50pt).
+    public static func renderWindowWithMacOSShadow(
+        windowBitmap: RawBitmap,
+        cornerRadiusPt: CGFloat = 14.5
+    ) -> RawBitmap {
+        let scale = max(1.0, windowBitmap.scaleFactor)
+        let winLogicalW = CGFloat(windowBitmap.width) / scale
+        let winLogicalH = CGFloat(windowBitmap.height) / scale
+
+        let padLeftPt: CGFloat = 38.0
+        let padRightPt: CGFloat = 38.0
+        let padTopPt: CGFloat = 26.0
+        let padBottomPt: CGFloat = 50.0
+
+        let totalLogicalW = winLogicalW + padLeftPt + padRightPt
+        let totalLogicalH = winLogicalH + padTopPt + padBottomPt
+        let totalPxW = max(1, Int((totalLogicalW * scale).rounded()))
+        let totalPxH = max(1, Int((totalLogicalH * scale).rounded()))
+
+        let out = RawBitmap(width: totalPxW, height: totalPxH, scaleFactor: scale)
+        out.withTopDownCGContext { ctx in
+            ctx.scaleBy(x: scale, y: scale)
+
+            let winRect = CGRect(x: padLeftPt, y: padTopPt, width: winLogicalW, height: winLogicalH)
+            let winPath = AppIconRenderer.continuousRoundedRectPath(rect: winRect, radius: cornerRadiusPt)
+            let shadowCastPath = AppIconRenderer.continuousRoundedRectPath(
+                rect: winRect.insetBy(dx: 0.5, dy: 0.5),
+                radius: max(1.0, cornerRadiusPt - 0.5)
+            )
+
+            // 1. Ambient soft Gaussian drop shadow (offset downward by 12pt in base device space)
+            ctx.saveGState()
+            ctx.setShadow(
+                offset: CGSize(width: 0, height: -12.0 * scale),
+                blur: 26.0 * scale,
+                color: NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.35).cgColor
+            )
+            ctx.setFillColor(NSColor.black.cgColor)
+            ctx.addPath(shadowCastPath)
+            ctx.fillPath()
+            ctx.restoreGState()
+
+            // 2. Crisp contact shadow immediately beneath the window edge
+            ctx.saveGState()
+            ctx.setShadow(
+                offset: CGSize(width: 0, height: -2.0 * scale),
+                blur: 5.0 * scale,
+                color: NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.17).cgColor
+            )
+            ctx.setFillColor(NSColor.black.cgColor)
+            ctx.addPath(shadowCastPath)
+            ctx.fillPath()
+            ctx.restoreGState()
+
+            // 3. Subtle 1px outer rim around the window perimeter for light-on-light edge definition
+            ctx.saveGState()
+            ctx.addRect(CGRect(x: 0, y: 0, width: totalLogicalW, height: totalLogicalH))
+            ctx.addPath(winPath)
+            ctx.clip(using: .evenOdd)
+            ctx.setStrokeColor(NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.12).cgColor)
+            ctx.setLineWidth(1.5)
+            ctx.addPath(winPath)
+            ctx.strokePath()
+            ctx.restoreGState()
+
+            // 4. Clear shadow caster inside window bounds, then clip to continuous rounded corners and draw window
+            ctx.saveGState()
+            ctx.addPath(winPath)
+            ctx.clip()
+            ctx.setBlendMode(.clear)
+            ctx.fill(winRect.insetBy(dx: -2.0, dy: -2.0))
+            ctx.setBlendMode(.normal)
+
+            let prev = NSGraphicsContext.current
+            NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: true)
+            NSGraphicsContext.current?.imageInterpolation = .none
+            windowBitmap.toNSImage().draw(
+                in: winRect,
+                from: .zero,
+                operation: .sourceOver,
+                fraction: 1.0,
+                respectFlipped: true,
+                hints: nil
+            )
+            NSGraphicsContext.current = prev
+            ctx.restoreGState()
+        }
+        return out
     }
 
     public static func warpMouseCursor(topDownPoint: CGPoint) {

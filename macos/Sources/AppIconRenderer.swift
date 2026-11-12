@@ -2,11 +2,12 @@ import AppKit
 import CoreGraphics
 import Foundation
 
-/// Vector icon renderer for SpanShot (1:1 port of src/AppIcon.cs adapted to Apple's macOS HIG 824/1024 continuous squircle grid):
-/// 1. Vibrant Apple-Blue gradient continuous superellipse squircle (#24A4FF -> #007AFF -> #004ED2)
-/// 2. Three rounded screenshot viewfinder corner brackets (Top-Left, Top-Right, Bottom-Right)
-/// 3. White open scissors oriented at -45 deg (handles at bottom-left, tapered blades opening toward top-right)
-/// 4. Monochrome template icon (18x18 pt @1x/@2x Retina) for the macOS menu bar NSStatusItem
+/// Vector icon renderer for SpanShot adapted to Apple's macOS HIG 824/1024 continuous squircle grid:
+/// 1. Tactile ceramic-white continuous superellipse squircle (#FFFFFF -> #EFF2F7) with subtle inner bevel & ambient drop shadow
+/// 2. Layered translucent ice-blue selection card in the midground for depth
+/// 3. Floating anodized Space-Black / Dark-Titanium corner brackets (#2E333D -> #111318) with soft elevation shadow
+/// 4. Luminous Apple-Blue (#2997FF -> #0062E3) optical center jewel as a restrained focal accent
+/// 5. Monochrome template icon (18x18 pt @1x/@2x Retina) for the macOS menu bar NSStatusItem
 public enum AppIconRenderer {
 
     /// Apple's exact 3-Bezier continuous corner curve (`kCACornerCurveContinuous` superellipse squircle).
@@ -238,7 +239,6 @@ public enum AppIconRenderer {
                 bitsPerPixel: 32
             ) else { continue }
 
-            rep.size = NSSize(width: ptSize, height: ptSize)
             NSGraphicsContext.saveGraphicsState()
             if let gctx = NSGraphicsContext(bitmapImageRep: rep) {
                 NSGraphicsContext.current = gctx
@@ -250,6 +250,8 @@ public enum AppIconRenderer {
                 drawStatusBarVector(ctx: ctx, size: CGFloat(px))
             }
             NSGraphicsContext.restoreGraphicsState()
+            // Must set `rep.size` AFTER drawing so NSGraphicsContext(bitmapImageRep:) does not apply a 2x CTM scale!
+            rep.size = NSSize(width: ptSize, height: ptSize)
             img.addRepresentation(rep)
         }
 
@@ -259,29 +261,41 @@ public enum AppIconRenderer {
 
     private static func drawStatusBarVector(ctx: CGContext, size: CGFloat) {
         let s = size / 100.0
-        let fg = CGColor(red: 0, green: 0, blue: 0, alpha: 1.0)
 
-        let cMargin: CGFloat = 10.5
-        let cArm: CGFloat = 16.0
-        let cRadius: CGFloat = 4.2
-        let cStroke: CGFloat = 6.8 * s
+        // Pure crisp monochrome strokes on 100% transparent background (no semi-transparent fill)
+        let cMargin: CGFloat = 17.5
+        let cRadius: CGFloat = 10.0
+        let cArm: CGFloat = 21.0
+        let cStroke: CGFloat = 7.6 * s
 
-        drawCornerBracket(ctx: ctx, origin: .zero, s: s, cx: cMargin, cy: cMargin, dirX: 1, dirY: 1, arm: cArm, cornerR: cRadius, strokeWidth: cStroke, color: fg)
-        drawCornerBracket(ctx: ctx, origin: .zero, s: s, cx: 100.0 - cMargin, cy: cMargin, dirX: -1, dirY: 1, arm: cArm, cornerR: cRadius, strokeWidth: cStroke, color: fg)
-        drawCornerBracket(ctx: ctx, origin: .zero, s: s, cx: 100.0 - cMargin, cy: 100.0 - cMargin, dirX: -1, dirY: -1, arm: cArm, cornerR: cRadius, strokeWidth: cStroke, color: fg)
+        let bracketsPath = CGMutablePath()
+        let corners: [(cx: CGFloat, cy: CGFloat, dirX: CGFloat, dirY: CGFloat)] = [
+            (cMargin, cMargin, 1, 1),
+            (100.0 - cMargin, cMargin, -1, 1),
+            (cMargin, 100.0 - cMargin, 1, -1),
+            (100.0 - cMargin, 100.0 - cMargin, -1, -1)
+        ]
+        for c in corners {
+            let p1 = CGPoint(x: (c.cx + c.dirX * cArm) * s, y: c.cy * s)
+            let pVert = CGPoint(x: c.cx * s, y: c.cy * s)
+            let p2 = CGPoint(x: c.cx * s, y: (c.cy + c.dirY * cArm) * s)
+            bracketsPath.move(to: p1)
+            bracketsPath.addArc(tangent1End: pVert, tangent2End: p2, radius: cRadius * s)
+            bracketsPath.addLine(to: p2)
+        }
 
-        drawScissors(
-            ctx: ctx,
-            origin: .zero,
-            s: s,
-            px: 50.0,
-            py: 50.0,
-            k: 1.12,
-            compactTrayMode: true,
-            fgColor: fg,
-            punchOutScrew: true,
-            screwColor: nil
-        )
+        ctx.saveGState()
+        ctx.setStrokeColor(red: 0, green: 0, blue: 0, alpha: 1.0)
+        ctx.setLineWidth(cStroke)
+        ctx.setLineCap(.round)
+        ctx.setLineJoin(.round)
+        ctx.addPath(bracketsPath)
+        ctx.strokePath()
+
+        let dotR: CGFloat = 7.2 * s
+        ctx.setFillColor(red: 0, green: 0, blue: 0, alpha: 1.0)
+        ctx.fillEllipse(in: CGRect(x: 50.0 * s - dotR, y: 50.0 * s - dotR, width: dotR * 2.0, height: dotR * 2.0))
+        ctx.restoreGState()
     }
 
     private static func drawAppIconInTopDownContext(
@@ -293,7 +307,7 @@ public enum AppIconRenderer {
         let colorSpace = CGColorSpaceCreateDeviceRGB()
 
         // Apple macOS HIG Icon Grid: 824x824 inside 1024x1024 (100/1024 = 9.765625% padding)
-        // Corner curvature 0.262 * badgeSide matches macOS Tahoe continuous squircle mask (diag=163 in 1024x1024)
+        // Corner curvature 0.262 * badgeSide matches macOS continuous squircle mask
         let pad: CGFloat = useSystemGridMargin
             ? (size * (100.0 / 1024.0))
             : (size * 0.02)
@@ -301,86 +315,211 @@ public enum AppIconRenderer {
         let radius = badgeSide * 0.262
         let badgeRect = CGRect(x: pad, y: pad, width: badgeSide, height: badgeSide)
         let badgePath = continuousRoundedRectPath(rect: badgeRect, radius: radius)
+        let bs = badgeSide / 100.0
+        let badgeOrigin = badgeRect.origin
 
-        // Subtle macOS icon drop shadow when using standard 824/1024 icon grid
+        // 0. Ambient macOS icon drop shadow when using standard 824/1024 icon grid
+        // Note: CGContext.setShadow offset is in base device space (+Y is up), so negative height casts shadow downward.
         if useSystemGridMargin && size >= 64 {
             ctx.saveGState()
             ctx.setShadow(
-                offset: CGSize(width: 0, height: size * (10.0 / 1024.0)),
-                blur: size * (22.0 / 1024.0),
-                color: CGColor(red: 0, green: 0.08, blue: 0.24, alpha: 0.28)
+                offset: CGSize(width: 0, height: -size * (10.0 / 1024.0)),
+                blur: size * (24.0 / 1024.0),
+                color: CGColor(red: 12.0 / 255.0, green: 18.0 / 255.0, blue: 32.0 / 255.0, alpha: 0.18)
             )
-            ctx.setFillColor(red: 0.0, green: 0.38, blue: 0.88, alpha: 1.0)
+            ctx.setFillColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 1.0)
             ctx.addPath(badgePath)
             ctx.fillPath()
             ctx.restoreGState()
         }
 
-        // 1. Vibrant Apple-Blue gradient continuous squircle background (#24A4FF -> #007AFF -> #004ED2)
+        // 1. Ceramic White continuous squircle base (#FFFFFF -> #FAFBFD -> #F1F4F9)
         ctx.saveGState()
         ctx.addPath(badgePath)
         ctx.clip()
 
         let bgColors: [CGFloat] = [
-            36.0 / 255.0, 164.0 / 255.0, 255.0 / 255.0, 1.0, // #24A4FF Luminous sky blue
-            0.0 / 255.0, 122.0 / 255.0, 255.0 / 255.0, 1.0,  // #007AFF Signature Apple Blue
-            0.0 / 255.0, 78.0 / 255.0, 210.0 / 255.0, 1.0    // #004ED2 Deep cobalt
+            1.0, 1.0, 1.0, 1.0,                                 // #FFFFFF Crisp top ceramic highlight
+            250.0 / 255.0, 251.0 / 255.0, 253.0 / 255.0, 1.0,   // #FAFBFD Alabaster mid
+            241.0 / 255.0, 244.0 / 255.0, 249.0 / 255.0, 1.0    // #F1F4F9 Subtle cool porcelain base
         ]
-        if let grad = CGGradient(colorSpace: colorSpace, colorComponents: bgColors, locations: [0.0, 0.52, 1.0], count: 3) {
+        if let grad = CGGradient(colorSpace: colorSpace, colorComponents: bgColors, locations: [0.0, 0.65, 1.0], count: 3) {
             ctx.drawLinearGradient(
                 grad,
-                start: CGPoint(x: badgeRect.minX, y: badgeRect.minY),
-                end: CGPoint(x: badgeRect.maxX, y: badgeRect.maxY),
+                start: CGPoint(x: badgeRect.midX, y: badgeRect.minY),
+                end: CGPoint(x: badgeRect.midX, y: badgeRect.maxY),
                 options: [.drawsBeforeStartLocation, .drawsAfterEndLocation]
             )
         }
 
-        // Flush hairline specular edge (stroked on badgePath while clipped to badgePath so zero inset gap occurs)
-        let bs = badgeSide / 100.0
-        ctx.setStrokeColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 42.0 / 255.0)
+        // Single flush hairline border (clipped to badgePath so zero double-ring artifact occurs)
+        ctx.setStrokeColor(red: 15.0 / 255.0, green: 23.0 / 255.0, blue: 42.0 / 255.0, alpha: 0.11)
         ctx.setLineWidth(max(1.0, 1.6 * bs))
         ctx.addPath(badgePath)
         ctx.strokePath()
-
         ctx.restoreGState()
 
-        // All interior graphics are mapped in the 0..100 coordinate space of `badgeRect`
-        let badgeOrigin = badgeRect.origin
-
-        // 2. Screenshot Viewfinder Corner Brackets (Top-Left, Top-Right, Bottom-Right)
-        let cMargin: CGFloat = compactTrayMode ? 14.5 : 16.0
-        let cArm: CGFloat = compactTrayMode ? 13.0 : 13.5
-        let cRadius: CGFloat = 4.2
-        let cStroke: CGFloat = (compactTrayMode ? 5.8 : 5.0) * bs
-        let bracketAlpha: CGFloat = (compactTrayMode ? 240.0 : 228.0) / 255.0
-        let bracketColor = CGColor(red: 1.0, green: 1.0, blue: 1.0, alpha: bracketAlpha)
-
-        // Top-Left corner bracket
-        drawCornerBracket(ctx: ctx, origin: badgeOrigin, s: bs, cx: cMargin, cy: cMargin, dirX: 1, dirY: 1, arm: cArm, cornerR: cRadius, strokeWidth: cStroke, color: bracketColor)
-        // Top-Right corner bracket (target of the scissor jaws)
-        drawCornerBracket(ctx: ctx, origin: badgeOrigin, s: bs, cx: 100.0 - cMargin, cy: cMargin, dirX: -1, dirY: 1, arm: cArm, cornerR: cRadius, strokeWidth: cStroke, color: bracketColor)
-        // Bottom-Right corner bracket
-        drawCornerBracket(ctx: ctx, origin: badgeOrigin, s: bs, cx: 100.0 - cMargin, cy: 100.0 - cMargin, dirX: -1, dirY: -1, arm: cArm, cornerR: cRadius, strokeWidth: cStroke, color: bracketColor)
-
-        // 3. Open Scissors Element (oriented along -45 deg diagonal: handles at bottom-left, blades opening to top-right)
-        let pivotX: CGFloat = 50.2
-        let pivotY: CGFloat = 49.8
-        let scaleFactor: CGFloat = compactTrayMode ? 1.08 : 1.04
-        let whiteColor = CGColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 1.0)
-        let screwColor = CGColor(red: 0.0, green: 88.0 / 255.0, blue: 218.0 / 255.0, alpha: 1.0)
-
-        drawScissors(
-            ctx: ctx,
-            origin: badgeOrigin,
-            s: bs,
-            px: pivotX,
-            py: pivotY,
-            k: scaleFactor,
-            compactTrayMode: compactTrayMode,
-            fgColor: whiteColor,
-            punchOutScrew: false,
-            screwColor: screwColor
+        // 2. Midground Depth Layer: Translucent Ice-Blue Selection Card (aligned with bracket centerline at 22.5..77.5)
+        let cMargin: CGFloat = compactTrayMode ? 21.0 : 22.5
+        let cRadius: CGFloat = 7.5
+        let cardSide = (100.0 - cMargin * 2.0) * bs
+        let cardRect = CGRect(
+            x: badgeOrigin.x + cMargin * bs,
+            y: badgeOrigin.y + cMargin * bs,
+            width: cardSide,
+            height: cardSide
         )
+        let cardPath = CGPath(
+            roundedRect: cardRect,
+            cornerWidth: cRadius * bs,
+            cornerHeight: cRadius * bs,
+            transform: nil
+        )
+
+        // Soft downward floating shadow under the selection card
+        ctx.saveGState()
+        ctx.setShadow(
+            offset: CGSize(width: 0, height: -2.5 * bs),
+            blur: 6.5 * bs,
+            color: CGColor(red: 0.0, green: 82.0 / 255.0, blue: 204.0 / 255.0, alpha: 0.12)
+        )
+        ctx.setFillColor(red: 236.0 / 255.0, green: 245.0 / 255.0, blue: 255.0 / 255.0, alpha: 1.0)
+        ctx.addPath(cardPath)
+        ctx.fillPath()
+        ctx.restoreGState()
+
+        // Selection card gradient fill (#F2F7FF -> #DFECFF) + subtle blue glass border
+        ctx.saveGState()
+        ctx.addPath(cardPath)
+        ctx.clip()
+        let cardColors: [CGFloat] = [
+            243.0 / 255.0, 248.0 / 255.0, 255.0 / 255.0, 1.0, // #F3F8FF
+            221.0 / 255.0, 236.0 / 255.0, 255.0 / 255.0, 1.0  // #DDECFF
+        ]
+        if let cardGrad = CGGradient(colorSpace: colorSpace, colorComponents: cardColors, locations: [0.0, 1.0], count: 2) {
+            ctx.drawLinearGradient(
+                cardGrad,
+                start: CGPoint(x: cardRect.minX, y: cardRect.minY),
+                end: CGPoint(x: cardRect.maxX, y: cardRect.maxY),
+                options: []
+            )
+        }
+        ctx.setStrokeColor(red: 0.0, green: 122.0 / 255.0, blue: 255.0 / 255.0, alpha: 0.25)
+        ctx.setLineWidth(max(1.0, 2.2 * bs))
+        ctx.addPath(cardPath)
+        ctx.strokePath()
+        ctx.restoreGState()
+
+        // 3. Foreground Primary Motif: Architectural Space-Black / Titanium Corner Brackets astride the card corners
+        let cArm: CGFloat = compactTrayMode ? 17.5 : 17.0
+        let cStroke: CGFloat = (compactTrayMode ? 6.8 : 6.2) * bs
+
+        let bracketsPath = CGMutablePath()
+        let corners: [(cx: CGFloat, cy: CGFloat, dirX: CGFloat, dirY: CGFloat)] = [
+            (cMargin, cMargin, 1, 1),
+            (100.0 - cMargin, cMargin, -1, 1),
+            (cMargin, 100.0 - cMargin, 1, -1),
+            (100.0 - cMargin, 100.0 - cMargin, -1, -1)
+        ]
+        for c in corners {
+            let p1 = CGPoint(x: badgeOrigin.x + (c.cx + c.dirX * cArm) * bs, y: badgeOrigin.y + c.cy * bs)
+            let pVert = CGPoint(x: badgeOrigin.x + c.cx * bs, y: badgeOrigin.y + c.cy * bs)
+            let p2 = CGPoint(x: badgeOrigin.x + c.cx * bs, y: badgeOrigin.y + (c.cy + c.dirY * cArm) * bs)
+            bracketsPath.move(to: p1)
+            bracketsPath.addArc(tangent1End: pVert, tangent2End: p2, radius: cRadius * bs)
+            bracketsPath.addLine(to: p2)
+        }
+
+        let strokedBrackets = bracketsPath.copy(
+            strokingWithWidth: cStroke,
+            lineCap: .round,
+            lineJoin: .round,
+            miterLimit: 10.0
+        )
+
+        // Downward elevation shadow cast by the dark titanium brackets onto the card & ceramic base
+        ctx.saveGState()
+        ctx.setShadow(
+            offset: CGSize(width: 0, height: -2.6 * bs),
+            blur: 5.0 * bs,
+            color: CGColor(red: 12.0 / 255.0, green: 18.0 / 255.0, blue: 32.0 / 255.0, alpha: 0.26)
+        )
+        ctx.setFillColor(red: 24.0 / 255.0, green: 28.0 / 255.0, blue: 35.0 / 255.0, alpha: 1.0)
+        ctx.addPath(strokedBrackets)
+        ctx.fillPath()
+        ctx.restoreGState()
+
+        // Machined Space-Black / Dark-Titanium vertical gradient (#3A4150 -> #1F232C -> #11141A)
+        ctx.saveGState()
+        ctx.addPath(strokedBrackets)
+        ctx.clip()
+        let titaniumColors: [CGFloat] = [
+            60.0 / 255.0, 66.0 / 255.0, 80.0 / 255.0, 1.0,  // #3C4250 Gunmetal top highlight
+            31.0 / 255.0, 35.0 / 255.0, 44.0 / 255.0, 1.0,  // #1F232C Anodized carbon mid
+            17.0 / 255.0, 20.0 / 255.0, 26.0 / 255.0, 1.0   // #11141A Deep obsidian base
+        ]
+        if let tiGrad = CGGradient(colorSpace: colorSpace, colorComponents: titaniumColors, locations: [0.0, 0.5, 1.0], count: 3) {
+            ctx.drawLinearGradient(
+                tiGrad,
+                start: CGPoint(x: badgeOrigin.x + 50.0 * bs, y: badgeOrigin.y + (cMargin - 3.5) * bs),
+                end: CGPoint(x: badgeOrigin.x + 50.0 * bs, y: badgeOrigin.y + (100.0 - cMargin + 3.5) * bs),
+                options: [.drawsBeforeStartLocation, .drawsAfterEndLocation]
+            )
+        }
+        ctx.restoreGState()
+
+        // 4. Focal Point Accent: Luminous Apple-Blue Optical Jewel at Center (50, 50)
+        let centerPt = CGPoint(x: badgeOrigin.x + 50.0 * bs, y: badgeOrigin.y + 50.0 * bs)
+        let outerRingR: CGFloat = (compactTrayMode ? 9.0 : 8.5) * bs
+        let dotR: CGFloat = (compactTrayMode ? 6.5 : 6.0) * bs
+
+        // Crisp white optical collar with soft downward blue elevation glow
+        ctx.saveGState()
+        ctx.setShadow(
+            offset: CGSize(width: 0, height: -2.4 * bs),
+            blur: 5.5 * bs,
+            color: CGColor(red: 0.0, green: 108.0 / 255.0, blue: 255.0 / 255.0, alpha: 0.34)
+        )
+        ctx.setFillColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 1.0)
+        ctx.fillEllipse(in: CGRect(
+            x: centerPt.x - outerRingR,
+            y: centerPt.y - outerRingR,
+            width: outerRingR * 2.0,
+            height: outerRingR * 2.0
+        ))
+        ctx.restoreGState()
+
+        // Luminous Apple-Blue jewel core (#38A8FF -> #007AFF -> #0051CC)
+        let dotRect = CGRect(x: centerPt.x - dotR, y: centerPt.y - dotR, width: dotR * 2.0, height: dotR * 2.0)
+        ctx.saveGState()
+        ctx.addEllipse(in: dotRect)
+        ctx.clip()
+        let blueColors: [CGFloat] = [
+            58.0 / 255.0, 170.0 / 255.0, 255.0 / 255.0, 1.0, // #3AAAFF Top highlight
+            0.0 / 255.0, 122.0 / 255.0, 255.0 / 255.0, 1.0,  // #007AFF Apple Blue
+            0.0 / 255.0, 81.0 / 255.0, 204.0 / 255.0, 1.0    // #0051CC Deep sapphire
+        ]
+        if let blueGrad = CGGradient(colorSpace: colorSpace, colorComponents: blueColors, locations: [0.0, 0.55, 1.0], count: 3) {
+            ctx.drawLinearGradient(
+                blueGrad,
+                start: CGPoint(x: centerPt.x, y: dotRect.minY),
+                end: CGPoint(x: centerPt.x, y: dotRect.maxY),
+                options: []
+            )
+        }
+        ctx.restoreGState()
+
+        // Subtle optical lens specular highlight dot at top-left of the blue jewel
+        let specR = 1.45 * bs
+        ctx.saveGState()
+        ctx.setFillColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 0.68)
+        ctx.fillEllipse(in: CGRect(
+            x: centerPt.x - 2.1 * bs - specR,
+            y: centerPt.y - 2.1 * bs - specR,
+            width: specR * 2.0,
+            height: specR * 2.0
+        ))
+        ctx.restoreGState()
     }
 
     private static func drawCornerBracket(

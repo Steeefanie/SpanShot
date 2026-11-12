@@ -51,15 +51,22 @@ public final class RegionSelectorForm: NSPanel {
     fileprivate let backingScaleX: CGFloat
     fileprivate let backingScaleY: CGFloat
     fileprivate let presetMode: CaptureActionMode
-    fileprivate let detectedWindows: [CGRect]
+    fileprivate let windowShadowCapture: Bool
+    fileprivate let detectedWindows: [DetectedWindowInfo]
 
     fileprivate var dragStart: NSPoint = .zero
     fileprivate var selectionRect: NSRect = .zero
     fileprivate var hoverWindowRect: NSRect = .zero
+    fileprivate var hoveredWindowInfo: DetectedWindowInfo?
+    fileprivate var selectedWindowInfo: DetectedWindowInfo?
     fileprivate var resizeInitialRect: NSRect = .zero
     fileprivate var activeDragZone: ResizeHitZone = .none
     fileprivate var isSelecting = false
     fileprivate var hasSelection = false
+
+    fileprivate var isWindowShadowSelectionActive: Bool {
+        return windowShadowCapture && selectedWindowInfo != nil
+    }
 
     fileprivate var activeTool: InlineAnnotateTool = .none
     fileprivate var selectedColorIndex = 0      // Default Red
@@ -116,11 +123,12 @@ public final class RegionSelectorForm: NSPanel {
     public private(set) var annotatedRegionBitmap: RawBitmap?
     public let captureWasBlockedByPermission: Bool
 
-    public init(presetMode: CaptureActionMode = .none) {
+    public init(presetMode: CaptureActionMode = .none, windowShadowCapture: Bool = true) {
         UiTheme.refreshSystemTheme()
         self.presetMode = presetMode
+        self.windowShadowCapture = windowShadowCapture
         self.virtualBoundsTopDown = ScreenCapturer.virtualScreenTopDownBounds
-        self.detectedWindows = ScreenCapturer.getVisibleWindowRectangles()
+        self.detectedWindows = ScreenCapturer.getVisibleWindows()
         let captured = ScreenCapturer.captureRegionWithStatus(self.virtualBoundsTopDown)
         self.desktopSnapshot = captured.bitmap
         self.captureWasBlockedByPermission = captured.isFallback
@@ -233,7 +241,9 @@ public final class RegionSelectorForm: NSPanel {
             break
         }
 
-        hoverWindowRect = findHoveredWindowRect(localPt: mousePos)
+        let hovered = findHoveredWindow(localPt: mousePos)
+        hoverWindowRect = hovered.rect
+        hoveredWindowInfo = hovered.info
         updateCursorForPoint(mousePos)
         refreshAllDisplays()
 
@@ -262,10 +272,13 @@ public final class RegionSelectorForm: NSPanel {
         if hasSelection {
             hasSelection = false
             selectionRect = .zero
+            selectedWindowInfo = nil
             activeTool = .none
             annotations.removeAll()
             activeDragZone = .none
-            hoverWindowRect = findHoveredWindowRect(localPt: mousePos)
+            let hovered = findHoveredWindow(localPt: mousePos)
+            hoverWindowRect = hovered.rect
+            hoveredWindowInfo = hovered.info
             updateCursorForPoint(mousePos)
             refreshAllDisplays()
         } else {
@@ -309,6 +322,7 @@ public final class RegionSelectorForm: NSPanel {
             finishNormalWithAction(.normalSaveCompleted)
             return true
         } else if activeTool == .none && (event.keyCode == 123 || event.keyCode == 124 || event.keyCode == 125 || event.keyCode == 126) {
+            selectedWindowInfo = nil
             let maxW = virtualBoundsTopDown.width
             let maxH = virtualBoundsTopDown.height
             let dx: CGFloat = event.keyCode == 123 ? -1 : (event.keyCode == 124 ? 1 : 0)
@@ -361,30 +375,65 @@ public final class RegionSelectorForm: NSPanel {
         let pw = max(1, Int((selectionRect.width * backingScaleX).rounded()))
         let ph = max(1, Int((selectionRect.height * backingScaleY).rounded()))
 
-        let bmp = desktopSnapshot.clone(x: px, y: py, width: pw, height: ph)
-        bmp.scaleFactor = desktopSnapshot.scaleFactor
-        guard !annotations.isEmpty else { return bmp }
-
-        bmp.withTopDownCGContext { ctx in
-            let prev = NSGraphicsContext.current
-            NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: true)
-            ctx.scaleBy(x: backingScaleX, y: backingScaleY)
-            ctx.translateBy(x: -selectionRect.origin.x, y: -selectionRect.origin.y)
-            for item in annotations {
-                SelectorCanvasView.drawSingleAnnotation(item)
+        var bmp: RawBitmap
+        if isWindowShadowSelectionActive, let winInfo = selectedWindowInfo {
+            let isOccludedByOtherApp = detectedWindows.contains { other in
+                other.zIndex < winInfo.zIndex
+                    && other.ownerPID != winInfo.ownerPID
+                    && !other.boundsTopDown.intersection(winInfo.boundsTopDown).isNull
             }
-            NSGraphicsContext.current = prev
+            if isOccludedByOtherApp,
+               let isolated = ScreenCapturer.captureIndependentWindow(
+                   windowID: winInfo.windowID,
+                   targetPixelWidth: pw,
+                   targetPixelHeight: ph,
+                   scale: desktopSnapshot.scaleFactor
+               ) {
+                bmp = isolated
+            } else {
+                bmp = desktopSnapshot.clone(x: px, y: py, width: pw, height: ph)
+                bmp.scaleFactor = desktopSnapshot.scaleFactor
+            }
+        } else {
+            bmp = desktopSnapshot.clone(x: px, y: py, width: pw, height: ph)
+            bmp.scaleFactor = desktopSnapshot.scaleFactor
+        }
+
+        if !annotations.isEmpty {
+            bmp.withTopDownCGContext { ctx in
+                let prev = NSGraphicsContext.current
+                NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: true)
+                ctx.scaleBy(x: backingScaleX, y: backingScaleY)
+                if isWindowShadowSelectionActive {
+                    let clipPath = AppIconRenderer.continuousRoundedRectPath(
+                        rect: CGRect(x: 0, y: 0, width: selectionRect.width, height: selectionRect.height),
+                        radius: 14.5
+                    )
+                    ctx.addPath(clipPath)
+                    ctx.clip()
+                }
+                ctx.translateBy(x: -selectionRect.origin.x, y: -selectionRect.origin.y)
+                for item in annotations {
+                    SelectorCanvasView.drawSingleAnnotation(item)
+                }
+                NSGraphicsContext.current = prev
+            }
+        }
+
+        if isWindowShadowSelectionActive {
+            return ScreenCapturer.renderWindowWithMacOSShadow(windowBitmap: bmp, cornerRadiusPt: 14.5)
         }
         return bmp
     }
 
-    fileprivate func findHoveredWindowRect(localPt: NSPoint) -> NSRect {
+    fileprivate func findHoveredWindow(localPt: NSPoint) -> (rect: NSRect, info: DetectedWindowInfo?) {
         let screenPt = CGPoint(
             x: localPt.x + virtualBoundsTopDown.origin.x,
             y: localPt.y + virtualBoundsTopDown.origin.y
         )
         let viewBounds = NSRect(x: 0, y: 0, width: virtualBoundsTopDown.width, height: virtualBoundsTopDown.height)
-        for wr in detectedWindows {
+        for win in detectedWindows {
+            let wr = win.boundsTopDown
             if wr.contains(screenPt) {
                 let localRect = NSRect(
                     x: wr.origin.x - virtualBoundsTopDown.origin.x,
@@ -393,11 +442,11 @@ public final class RegionSelectorForm: NSPanel {
                     height: wr.height
                 ).intersection(viewBounds)
                 if localRect.width >= 50 && localRect.height >= 50 {
-                    return localRect
+                    return (localRect, win)
                 }
             }
         }
-        return .zero
+        return (.zero, nil)
     }
 
     fileprivate func hitTestSelection(_ pt: NSPoint) -> ResizeHitZone {
@@ -460,6 +509,7 @@ public final class RegionSelectorForm: NSPanel {
     }
 
     fileprivate func applyResizeOrMove(_ pt: NSPoint) {
+        selectedWindowInfo = nil
         let dx = pt.x - dragStart.x
         let dy = pt.y - dragStart.y
         let r = resizeInitialRect
@@ -659,16 +709,28 @@ public final class RegionSelectorForm: NSPanel {
 
             let dimColor = NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 120 / 255.0)
             if owner.selectionRect.width > 0 && owner.selectionRect.height > 0 {
-                let path = NSBezierPath(rect: virtualRect)
-                path.appendRect(owner.selectionRect)
-                path.windingRule = .evenOdd
-                dimColor.setFill()
-                path.fill()
+                if owner.isWindowShadowSelectionActive, let ctx = NSGraphicsContext.current?.cgContext {
+                    let selPath = AppIconRenderer.continuousRoundedRectPath(rect: owner.selectionRect, radius: 14.5)
+                    ctx.saveGState()
+                    ctx.addRect(virtualRect)
+                    ctx.addPath(selPath)
+                    ctx.setFillColor(dimColor.cgColor)
+                    ctx.fillPath(using: .evenOdd)
+                    ctx.restoreGState()
+                } else {
+                    let path = NSBezierPath(rect: virtualRect)
+                    path.appendRect(owner.selectionRect)
+                    path.windingRule = .evenOdd
+                    dimColor.setFill()
+                    path.fill()
+                }
             } else if owner.hoverWindowRect.width > 8 && owner.hoverWindowRect.height > 8,
                       let ctx = NSGraphicsContext.current?.cgContext {
                 // Cut out the hovered macOS window using macOS Tahoe's 14.5pt continuous corner curve
-                let winRadius: CGFloat = 14.5
-                let hoverPath = AppIconRenderer.continuousRoundedRectPath(rect: owner.hoverWindowRect, radius: winRadius)
+                let winRadius: CGFloat = owner.windowShadowCapture ? 14.5 : 0.0
+                let hoverPath = winRadius > 0
+                    ? AppIconRenderer.continuousRoundedRectPath(rect: owner.hoverWindowRect, radius: winRadius)
+                    : CGPath(rect: owner.hoverWindowRect, transform: nil)
                 ctx.saveGState()
                 ctx.addRect(virtualRect)
                 ctx.addPath(hoverPath)
@@ -693,11 +755,11 @@ public final class RegionSelectorForm: NSPanel {
             if !owner.hasSelection && !owner.isSelecting {
                 let prompt: String
                 if owner.presetMode == .verticalScroll {
-                    prompt = "纵向长截图 · 请拖动框选区域或点击窗口 (Esc 退出)"
+                    prompt = L10n.promptVerticalScroll
                 } else if owner.presetMode == .horizontalScroll {
-                    prompt = "横向长截图 · 请拖动框选区域或点击窗口 (Esc 退出)"
+                    prompt = L10n.promptHorizontalScroll
                 } else {
-                    prompt = "请拖动框选区域或点击窗口 · 右键或 Esc 退出"
+                    prompt = L10n.promptNormalCapture
                 }
                 let font = UiTheme.fontPx(13)
                 let psz = (prompt as NSString).size(withAttributes: [.font: font])
@@ -719,7 +781,13 @@ public final class RegionSelectorForm: NSPanel {
 
             if owner.selectionRect.width > 0 && owner.selectionRect.height > 0 {
                 NSGraphicsContext.saveGraphicsState()
-                NSBezierPath(rect: owner.selectionRect).addClip()
+                if owner.isWindowShadowSelectionActive, let ctx = NSGraphicsContext.current?.cgContext {
+                    let clipPath = AppIconRenderer.continuousRoundedRectPath(rect: owner.selectionRect, radius: 14.5)
+                    ctx.addPath(clipPath)
+                    ctx.clip()
+                } else {
+                    NSBezierPath(rect: owner.selectionRect).addClip()
+                }
                 for item in owner.annotations {
                     Self.drawSingleAnnotation(item)
                 }
@@ -728,11 +796,23 @@ public final class RegionSelectorForm: NSPanel {
                 }
                 NSGraphicsContext.restoreGraphicsState()
 
-                // Exact pixel-aligned 1pt stroke at inset 0.5pt (zero subpixel ghosting on Retina)
-                UiTheme.weChatGreen.setStroke()
-                let bp = NSBezierPath(rect: owner.selectionRect.insetBy(dx: 0.5, dy: 0.5))
-                bp.lineWidth = 1.0
-                bp.stroke()
+                if owner.isWindowShadowSelectionActive, let ctx = NSGraphicsContext.current?.cgContext {
+                    let selPath = AppIconRenderer.continuousRoundedRectPath(rect: owner.selectionRect, radius: 14.5)
+                    ctx.saveGState()
+                    ctx.addPath(selPath)
+                    ctx.clip()
+                    ctx.setStrokeColor(UiTheme.weChatGreen.cgColor)
+                    ctx.setLineWidth(3.0)
+                    ctx.addPath(selPath)
+                    ctx.strokePath()
+                    ctx.restoreGState()
+                } else {
+                    // Exact pixel-aligned 1pt stroke at inset 0.5pt (zero subpixel ghosting on Retina)
+                    UiTheme.weChatGreen.setStroke()
+                    let bp = NSBezierPath(rect: owner.selectionRect.insetBy(dx: 0.5, dy: 0.5))
+                    bp.lineWidth = 1.0
+                    bp.stroke()
+                }
 
                 if owner.annotations.isEmpty && owner.activeTool == .none {
                     let midX = owner.selectionRect.midX
@@ -750,7 +830,9 @@ public final class RegionSelectorForm: NSPanel {
                 let dispBounds = owner.localDisplayVirtualRect(forRect: owner.selectionRect)
                 let pxW = Int((owner.selectionRect.width * owner.backingScaleX).rounded())
                 let pxH = Int((owner.selectionRect.height * owner.backingScaleY).rounded())
-                let sizeText = String(format: "%d × %d px", pxW, pxH)
+                let sizeText = owner.isWindowShadowSelectionActive
+                    ? L10n.sizeBadgeWithWindowShadow(pxW, pxH)
+                    : String(format: "%d × %d px", pxW, pxH)
                 let badgeFont = UiTheme.fontPx(12)
                 let tsz = (sizeText as NSString).size(withAttributes: [.font: badgeFont])
                 let bw = ceil(tsz.width) + 12
@@ -946,7 +1028,7 @@ public final class RegionSelectorForm: NSPanel {
             let tbFont = UiTheme.fontPx(13)
             UiTheme.drawPillButton(
                 rect: owner.btnVerticalScroll,
-                text: "纵向长截",
+                text: L10n.toolbarVerticalScrollBtn,
                 baseColor: owner.btnVerticalScroll.contains(mp) ? UiTheme.toolbarHover : .clear,
                 hovered: false,
                 radius: 4,
@@ -955,7 +1037,7 @@ public final class RegionSelectorForm: NSPanel {
             )
             UiTheme.drawPillButton(
                 rect: owner.btnHorizontalScroll,
-                text: "横向长截",
+                text: L10n.toolbarHorizontalScrollBtn,
                 baseColor: owner.btnHorizontalScroll.contains(mp) ? UiTheme.toolbarHover : .clear,
                 hovered: false,
                 radius: 4,
@@ -991,16 +1073,16 @@ public final class RegionSelectorForm: NSPanel {
 
             var tip: String?
             var tipTarget: NSRect = .zero
-            if owner.btnRectTool.contains(mp) { tip = "矩形"; tipTarget = owner.btnRectTool }
-            else if owner.btnArrowTool.contains(mp) { tip = "箭头"; tipTarget = owner.btnArrowTool }
-            else if owner.btnPenTool.contains(mp) { tip = "画笔"; tipTarget = owner.btnPenTool }
-            else if owner.btnVerticalScroll.contains(mp) { tip = "纵向长截图 (V)"; tipTarget = owner.btnVerticalScroll }
-            else if owner.btnHorizontalScroll.contains(mp) { tip = "横向长截图 (H)"; tipTarget = owner.btnHorizontalScroll }
-            else if owner.btnUndoTool.contains(mp) { tip = "撤销 (⌘Z)"; tipTarget = owner.btnUndoTool }
-            else if owner.btnPin.contains(mp) { tip = "贴图 (P)"; tipTarget = owner.btnPin }
-            else if owner.btnSave.contains(mp) { tip = "保存 (⌘S)"; tipTarget = owner.btnSave }
-            else if owner.btnCancel.contains(mp) { tip = "退出 (Esc)"; tipTarget = owner.btnCancel }
-            else if owner.btnCopyFinish.contains(mp) { tip = "完成 (↩)"; tipTarget = owner.btnCopyFinish }
+            if owner.btnRectTool.contains(mp) { tip = L10n.tipRectTool; tipTarget = owner.btnRectTool }
+            else if owner.btnArrowTool.contains(mp) { tip = L10n.tipArrowTool; tipTarget = owner.btnArrowTool }
+            else if owner.btnPenTool.contains(mp) { tip = L10n.tipPenTool; tipTarget = owner.btnPenTool }
+            else if owner.btnVerticalScroll.contains(mp) { tip = L10n.tipVerticalScroll; tipTarget = owner.btnVerticalScroll }
+            else if owner.btnHorizontalScroll.contains(mp) { tip = L10n.tipHorizontalScroll; tipTarget = owner.btnHorizontalScroll }
+            else if owner.btnUndoTool.contains(mp) { tip = L10n.tipUndo; tipTarget = owner.btnUndoTool }
+            else if owner.btnPin.contains(mp) { tip = L10n.tipPin; tipTarget = owner.btnPin }
+            else if owner.btnSave.contains(mp) { tip = L10n.tipSave; tipTarget = owner.btnSave }
+            else if owner.btnCancel.contains(mp) { tip = L10n.tipCancel; tipTarget = owner.btnCancel }
+            else if owner.btnCopyFinish.contains(mp) { tip = L10n.tipFinish; tipTarget = owner.btnCopyFinish }
 
             if let tipText = tip {
                 let dispBounds = owner.localDisplayVirtualRect(forRect: owner.toolbarBounds)
@@ -1210,6 +1292,7 @@ public final class RegionSelectorForm: NSPanel {
 
             owner.isSelecting = true
             owner.hasSelection = false
+            owner.selectedWindowInfo = nil
             owner.activeTool = .none
             owner.annotations.removeAll()
             owner.activeDragZone = .none
@@ -1225,7 +1308,9 @@ public final class RegionSelectorForm: NSPanel {
             let pt = virtualPoint(from: event)
             owner.mousePos = pt
             if !owner.hasSelection && !owner.isSelecting {
-                owner.hoverWindowRect = owner.findHoveredWindowRect(localPt: pt)
+                let hovered = owner.findHoveredWindow(localPt: pt)
+                owner.hoverWindowRect = hovered.rect
+                owner.hoveredWindowInfo = hovered.info
             }
             owner.updateCursorForPoint(pt)
             owner.refreshAllDisplays()
@@ -1287,9 +1372,11 @@ public final class RegionSelectorForm: NSPanel {
                 owner.isSelecting = false
                 if owner.selectionRect.width >= 30 && owner.selectionRect.height >= 30 {
                     owner.hasSelection = true
+                    owner.selectedWindowInfo = nil
                 } else if owner.hoverWindowRect.width >= 50 && owner.hoverWindowRect.height >= 50 {
                     owner.selectionRect = owner.hoverWindowRect.integral
                     owner.hasSelection = true
+                    owner.selectedWindowInfo = owner.hoveredWindowInfo
                 }
 
                 if owner.hasSelection {

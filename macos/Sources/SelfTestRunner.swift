@@ -655,10 +655,10 @@ public enum SelfTestRunner {
         print("\n[Test 7] v1.1.0 Features (Verified Auto-Save + Semantic Version Compare + Scissors Icon)")
 
         // 1. Semantic version comparison
-        guard UpdateManager.currentVersion == "1.1.0" else { return false }
-        guard UpdateManager.isVersionNewer(candidate: "v1.2.0", current: "1.1.0") else { return false }
-        guard !UpdateManager.isVersionNewer(candidate: "v1.1.0", current: "1.1.0") else { return false }
-        guard !UpdateManager.isVersionNewer(candidate: "v1.0.9", current: "1.1.0") else { return false }
+        guard UpdateManager.currentVersion == "1.2.0" else { return false }
+        guard UpdateManager.isVersionNewer(candidate: "v1.3.0", current: "1.2.0") else { return false }
+        guard !UpdateManager.isVersionNewer(candidate: "v1.2.0", current: "1.2.0") else { return false }
+        guard !UpdateManager.isVersionNewer(candidate: "v1.1.0", current: "1.2.0") else { return false }
 
         // 2. Folder write validation & auto-save bitmap
         let tmpDir = (NSTemporaryDirectory() as NSString).appendingPathComponent("SpanShot_SelfTest_\(UUID().uuidString)")

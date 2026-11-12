@@ -3,7 +3,7 @@ import Carbon
 import Foundation
 
 /// Minimalist adaptive main window + NSStatusItem menu bar agent (1:1 port of src/MainForm.cs v1.1.0, enhanced for macOS).
-public final class MainForm: NSWindow {
+public final class MainForm: NSWindow, NSWindowDelegate {
     public private(set) static weak var shared: MainForm?
 
     private static let prefKeyHotkeyCode = "SpanShot.HotkeyKeyCode"
@@ -12,6 +12,7 @@ public final class MainForm: NSWindow {
 
     fileprivate var statusItem: NSStatusItem?
     fileprivate var menuCaptureItem: NSMenuItem?
+    fileprivate var menuWindowShadowItem: NSMenuItem?
     fileprivate var menuQuickCopyItem: NSMenuItem?
     fileprivate var menuAutoSaveItem: NSMenuItem?
     fileprivate var menuAutoStartItem: NSMenuItem?
@@ -22,6 +23,7 @@ public final class MainForm: NSWindow {
     fileprivate var captureWasNormalVisible = false
     fileprivate var keepInBackground = true
     fileprivate var hideStatusBarIcon = false
+    fileprivate var windowShadowCapture = true
     fileprivate var autoStart = false
     fileprivate var quickCopyOnly = false
     fileprivate var autoSave = false
@@ -41,6 +43,7 @@ public final class MainForm: NSWindow {
     fileprivate var hotkeyCarbonMods: UInt32 = UInt32(cmdKey | shiftKey)
     fileprivate var hotkeyDisplay: String = "⌘⇧A"
     fileprivate var isRecordingHotkey = false
+    fileprivate var isLanguageMenuOpen = false
 
     fileprivate var draggingWindow = false
     fileprivate var dragStartScreenPt: NSPoint = .zero
@@ -49,23 +52,30 @@ public final class MainForm: NSWindow {
 
     fileprivate let brandIconImage: NSImage
 
-    // Layout rects (318 x 340 logical points, 1:1 with src/MainForm.cs + macOS status bar toggle)
+    // Layout rects (326 x 420 logical points, functionally grouped macOS native settings cards)
     fileprivate var headerRect: NSRect = .zero
+    fileprivate var btnLangRect: NSRect = .zero
     fileprivate var btnMinimizeRect: NSRect = .zero
     fileprivate var btnCloseRect: NSRect = .zero
     fileprivate var btnCaptureRect: NSRect = .zero
     fileprivate var btnHotkeyBadgeRect: NSRect = .zero
-    fileprivate var chkKeepAliveRect: NSRect = .zero
-    fileprivate var chkHideStatusBarRect: NSRect = .zero
-    fileprivate var chkAutoStartRect: NSRect = .zero
+    fileprivate var lblCaptureSectionRect: NSRect = .zero
+    fileprivate var captureCardRect: NSRect = .zero
+    fileprivate var chkWindowShadowRect: NSRect = .zero
     fileprivate var chkQuickCopyRect: NSRect = .zero
     fileprivate var chkAutoSaveRect: NSRect = .zero
     fileprivate var btnOpenSaveDirRect: NSRect = .zero
     fileprivate var btnChangeSaveDirRect: NSRect = .zero
     fileprivate var lblAutoSavePathRect: NSRect = .zero
+    fileprivate var lblSystemSectionRect: NSRect = .zero
+    fileprivate var systemCardRect: NSRect = .zero
+    fileprivate var chkKeepAliveRect: NSRect = .zero
+    fileprivate var chkHideStatusBarRect: NSRect = .zero
+    fileprivate var chkAutoStartRect: NSRect = .zero
     fileprivate var bottomStatusRowRect: NSRect = .zero
     fileprivate var lnkUpdateActionRect: NSRect = .zero
     fileprivate var lnkIgnoreUpdateRect: NSRect = .zero
+    fileprivate var langPopupRect: NSRect = .zero
 
     private var activeSelector: RegionSelectorForm?
     private var activeScrollSession: ScrollCaptureSessionForm?
@@ -92,110 +102,142 @@ public final class MainForm: NSWindow {
         override func draw(_ dirtyRect: NSRect) {
             guard let owner = owner else { return }
 
-            NSColor.clear.setFill()
+            UiTheme.bgDark.setFill()
             bounds.fill()
 
-            UiTheme.fillAndStrokeRoundedRect(
-                bounds,
-                radius: 15,
-                fillColor: UiTheme.bgDark,
-                strokeColor: UiTheme.borderSubtle.withAlphaComponent(UiTheme.isDarkMode ? 0.65 : 0.35),
-                lineWidth: 0.5
-            )
-
-            // 1. Brand icon + Title + Minimize & Close buttons
-            let iconRect = NSRect(x: 16, y: 12, width: 20, height: 20)
-            NSGraphicsContext.current?.imageInterpolation = .high
-            owner.brandIconImage.draw(
-                in: iconRect,
-                from: .zero,
-                operation: .sourceOver,
-                fraction: 1.0,
-                respectFlipped: true,
-                hints: nil
-            )
-
+            // 1. Spacious 52pt unified header bar: native left traffic lights (center Y=26, left X=19)
+            //    + centered "SpanShot" title + right-side Globe button (center Y=26, right X=w-19)
             UiTheme.drawCenteredText(
                 "SpanShot",
-                in: NSRect(x: 42, y: 6, width: 150, height: 32),
-                font: UiTheme.fontPx(15, bold: true),
+                in: NSRect(x: 0, y: 0, width: bounds.width, height: 52),
+                font: NSFont.systemFont(ofSize: 13.5, weight: .semibold),
                 color: UiTheme.textPrimary,
-                alignment: .left
+                alignment: .center
             )
 
-            let minHovered = owner.btnMinimizeRect.contains(owner.mousePos)
-            UiTheme.drawPillButton(
-                rect: owner.btnMinimizeRect,
-                text: "—",
-                baseColor: minHovered ? UiTheme.bgCardHover : .clear,
-                hovered: false,
-                radius: 4,
-                font: UiTheme.fontPx(12),
-                textColor: minHovered ? UiTheme.textPrimary : UiTheme.textSecondary
+            let langHovered = owner.btnLangRect.contains(owner.mousePos) || owner.isLanguageMenuOpen
+            if langHovered {
+                UiTheme.fillRoundedRect(owner.btnLangRect, radius: 6, color: UiTheme.bgCardHover)
+            }
+            UiTheme.drawIconGlobe(
+                btnRect: owner.btnLangRect,
+                color: langHovered ? UiTheme.textPrimary : UiTheme.textSecondary
             )
 
-            let closeHovered = owner.btnCloseRect.contains(owner.mousePos)
-            UiTheme.drawPillButton(
-                rect: owner.btnCloseRect,
-                text: "✕",
-                baseColor: closeHovered ? UiTheme.accentRed : .clear,
-                hovered: false,
-                radius: 4,
-                font: UiTheme.fontPx(12),
-                textColor: closeHovered ? .white : UiTheme.textSecondary
-            )
-
-            // 2. Primary Capture Button
-            let badgeHovered = owner.btnHotkeyBadgeRect.contains(owner.mousePos)
-            let btnHovered = owner.btnCaptureRect.contains(owner.mousePos) && !badgeHovered
+            // 2. Primary Capture Action Button
+            let interactableHover = !owner.isLanguageMenuOpen
+            let badgeHovered = interactableHover && owner.btnHotkeyBadgeRect.contains(owner.mousePos)
+            let btnHovered = interactableHover && owner.btnCaptureRect.contains(owner.mousePos) && !badgeHovered
             drawCaptureButton(
                 rect: owner.btnCaptureRect,
                 badgeRect: owner.btnHotkeyBadgeRect,
-                label: "开始截图",
-                hotkey: owner.isRecordingHotkey ? "请按键..." : owner.hotkeyDisplay,
+                label: L10n.startCapture,
+                hotkey: owner.isRecordingHotkey ? L10n.pressKeysPrompt : owner.hotkeyDisplay,
                 btnHovered: btnHovered,
                 badgeHovered: badgeHovered,
                 recording: owner.isRecordingHotkey
             )
 
-            // 3. Checkboxes: Keep in Background, Hide Status Bar Icon (macOS), Auto-Start, Quick Copy
-            drawCheckboxOption(
-                rect: owner.chkKeepAliveRect,
-                label: "常驻后台（最小化到托盘）",
-                subNote: nil,
-                isChecked: owner.keepInBackground,
-                hovered: owner.chkKeepAliveRect.contains(owner.mousePos)
+            let cardBorder = UiTheme.borderSubtle.withAlphaComponent(UiTheme.isDarkMode ? 0.55 : 0.75)
+            let sectionFont = NSFont.systemFont(ofSize: 11.5, weight: .semibold)
+            let sectionColor = UiTheme.textSecondary.withAlphaComponent(0.9)
+
+            // 3. Group 1: 「截图与保存」 (Capture & Save Preferences)
+            UiTheme.drawCenteredText(
+                L10n.sectionCaptureAndSave,
+                in: owner.lblCaptureSectionRect,
+                font: sectionFont,
+                color: sectionColor,
+                alignment: .left
             )
 
-            drawCheckboxOption(
-                rect: owner.chkHideStatusBarRect,
-                label: "隐藏顶部状态栏图标（后台仍常驻运行）",
-                subNote: nil,
-                isChecked: owner.hideStatusBarIcon,
-                hovered: owner.chkHideStatusBarRect.contains(owner.mousePos)
+            UiTheme.fillAndStrokeRoundedRect(
+                owner.captureCardRect,
+                radius: 10,
+                fillColor: UiTheme.bgCard,
+                strokeColor: cardBorder,
+                lineWidth: 0.5
             )
 
-            drawCheckboxOption(
-                rect: owner.chkAutoStartRect,
-                label: "开机自启",
-                subNote: nil,
-                isChecked: owner.autoStart,
-                hovered: owner.chkAutoStartRect.contains(owner.mousePos)
+            drawToggleRow(
+                rect: owner.chkWindowShadowRect,
+                label: L10n.windowShadowLabel,
+                rightHint: L10n.windowShadowHint,
+                isChecked: owner.windowShadowCapture,
+                hovered: interactableHover && owner.chkWindowShadowRect.contains(owner.mousePos)
             )
 
-            drawCheckboxOption(
+            drawCardDivider(in: owner.captureCardRect, y: owner.chkQuickCopyRect.minY)
+
+            drawToggleRow(
                 rect: owner.chkQuickCopyRect,
-                label: "快捷截图",
-                subNote: "完成后直接复制到剪贴板，不打开预览窗",
+                label: L10n.quickCopyLabel,
+                rightHint: L10n.quickCopyHint,
                 isChecked: owner.quickCopyOnly,
-                hovered: owner.chkQuickCopyRect.contains(owner.mousePos)
+                hovered: interactableHover && owner.chkQuickCopyRect.contains(owner.mousePos)
             )
 
-            // 4. Auto-Save section with folder action buttons & clickable path
+            drawCardDivider(in: owner.captureCardRect, y: owner.chkAutoSaveRect.minY)
+
             drawAutoSaveOption(owner: owner)
+
+            // 4. Group 2: 「系统与后台」 (System & Background Preferences)
+            UiTheme.drawCenteredText(
+                L10n.sectionSystemAndBg,
+                in: owner.lblSystemSectionRect,
+                font: sectionFont,
+                color: sectionColor,
+                alignment: .left
+            )
+
+            UiTheme.fillAndStrokeRoundedRect(
+                owner.systemCardRect,
+                radius: 10,
+                fillColor: UiTheme.bgCard,
+                strokeColor: cardBorder,
+                lineWidth: 0.5
+            )
+
+            drawToggleRow(
+                rect: owner.chkKeepAliveRect,
+                label: L10n.keepAliveLabel,
+                rightHint: nil,
+                isChecked: owner.keepInBackground,
+                hovered: interactableHover && owner.chkKeepAliveRect.contains(owner.mousePos)
+            )
+
+            drawCardDivider(in: owner.systemCardRect, y: owner.chkHideStatusBarRect.minY)
+
+            drawToggleRow(
+                rect: owner.chkHideStatusBarRect,
+                label: L10n.hideStatusBarLabel,
+                rightHint: nil,
+                isChecked: owner.hideStatusBarIcon,
+                hovered: interactableHover && owner.chkHideStatusBarRect.contains(owner.mousePos)
+            )
+
+            drawCardDivider(in: owner.systemCardRect, y: owner.chkAutoStartRect.minY)
+
+            drawToggleRow(
+                rect: owner.chkAutoStartRect,
+                label: L10n.autoStartLabel,
+                rightHint: nil,
+                isChecked: owner.autoStart,
+                hovered: interactableHover && owner.chkAutoStartRect.contains(owner.mousePos)
+            )
 
             // 5. Bottom Status / Inline Notice / Update Check Row
             drawBottomStatusRow(owner: owner)
+        }
+
+        private func drawCardDivider(in cardRect: NSRect, y: CGFloat) {
+            UiTheme.dividerColor.withAlphaComponent(UiTheme.isDarkMode ? 0.55 : 0.65).setFill()
+            NSRect(
+                x: cardRect.minX + 14,
+                y: floor(y),
+                width: cardRect.width - 28,
+                height: 0.5
+            ).fill()
         }
 
         private func drawCaptureButton(
@@ -208,9 +250,9 @@ public final class MainForm: NSWindow {
             recording: Bool
         ) {
             let bg = btnHovered ? UiTheme.lighten(UiTheme.weChatGreen, delta: 14) : UiTheme.weChatGreen
-            UiTheme.fillRoundedRect(rect, radius: 8, color: bg)
+            UiTheme.fillRoundedRect(rect, radius: 10, color: bg)
 
-            let textRect = NSRect(x: rect.minX + 18, y: rect.minY, width: rect.width - 104, height: rect.height)
+            let textRect = NSRect(x: rect.minX + 16, y: rect.minY, width: rect.width - 100, height: rect.height)
             UiTheme.drawCenteredText(label, in: textRect, font: UiTheme.fontPx(15, bold: true), color: .white, alignment: .left)
 
             let badgeBg: NSColor
@@ -224,13 +266,13 @@ public final class MainForm: NSWindow {
             if recording || badgeHovered {
                 UiTheme.fillAndStrokeRoundedRect(
                     badgeRect,
-                    radius: 5,
+                    radius: 6,
                     fillColor: badgeBg,
                     strokeColor: recording ? .white : NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.45),
                     lineWidth: 1.0
                 )
             } else {
-                UiTheme.fillRoundedRect(badgeRect, radius: 5, color: badgeBg)
+                UiTheme.fillRoundedRect(badgeRect, radius: 6, color: badgeBg)
             }
             UiTheme.drawCenteredText(
                 hotkey,
@@ -241,46 +283,81 @@ public final class MainForm: NSWindow {
             )
         }
 
-        private func drawCheckboxOption(rect: NSRect, label: String, subNote: String?, isChecked: Bool, hovered: Bool) {
-            let boxSz: CGFloat = 16
-            let boxY = rect.minY + 4
-            let boxRect = NSRect(x: rect.minX, y: boxY, width: boxSz, height: boxSz)
+        private func drawToggleRow(rect: NSRect, label: String, rightHint: String?, isChecked: Bool, hovered: Bool) {
+            let swW: CGFloat = 32
+            let swH: CGFloat = 18
+            let swRect = NSRect(
+                x: rect.maxX - swW,
+                y: floor(rect.minY + (rect.height - swH) / 2.0),
+                width: swW,
+                height: swH
+            )
 
-            drawCheckBoxGlyph(boxRect: boxRect, isChecked: isChecked, hovered: hovered)
+            let lblFont = NSFont.systemFont(ofSize: 13, weight: .regular)
+            let lblWidth = ceil((label as NSString).size(withAttributes: [.font: lblFont]).width)
+            let maxAvailW = swRect.minX - rect.minX - 10
+            let titleDrawW = min(maxAvailW, lblWidth + 2)
+            let lblRect = NSRect(x: rect.minX, y: rect.minY, width: titleDrawW, height: rect.height)
+            UiTheme.drawCenteredText(
+                label,
+                in: lblRect,
+                font: lblFont,
+                color: UiTheme.textPrimary,
+                alignment: .left,
+                lineBreakMode: .byTruncatingTail
+            )
 
-            let textX = boxRect.maxX + 8
-            let textW = rect.width - boxSz - 8
-            let lblRect = NSRect(x: textX, y: rect.minY, width: textW, height: 24)
-            let lblColor = (hovered || isChecked) ? UiTheme.textPrimary : UiTheme.textSecondary
-            UiTheme.drawCenteredText(label, in: lblRect, font: UiTheme.fontPx(13), color: lblColor, alignment: .left)
-
-            if let note = subNote, !note.isEmpty {
-                let noteRect = NSRect(x: textX, y: rect.minY + 22, width: textW, height: 20)
-                UiTheme.drawCenteredText(note, in: noteRect, font: UiTheme.fontPx(11), color: UiTheme.textSecondary, alignment: .left)
+            if let hint = rightHint, !hint.isEmpty {
+                let hintX = lblRect.maxX + 8
+                let hintW = swRect.minX - 10 - hintX
+                if hintW >= 36 {
+                    let hintRect = NSRect(x: hintX, y: rect.minY, width: hintW, height: rect.height)
+                    UiTheme.drawCenteredText(
+                        hint,
+                        in: hintRect,
+                        font: UiTheme.fontPx(11.5),
+                        color: UiTheme.textSecondary.withAlphaComponent(hovered ? 0.95 : 0.78),
+                        alignment: .right,
+                        lineBreakMode: .byTruncatingTail
+                    )
+                }
             }
+
+            drawToggleSwitch(rect: swRect, isChecked: isChecked, hovered: hovered)
         }
 
         private func drawAutoSaveOption(owner: MainForm) {
-            let boxSz: CGFloat = 16
-            let boxY = owner.chkAutoSaveRect.minY + 4
-            let boxRect = NSRect(x: owner.chkAutoSaveRect.minX, y: boxY, width: boxSz, height: boxSz)
+            let rowRect = owner.chkAutoSaveRect
+            let topLineH: CGFloat = 34
+            let swW: CGFloat = 32
+            let swH: CGFloat = 18
+            let swRect = NSRect(
+                x: rowRect.maxX - swW,
+                y: floor(rowRect.minY + (topLineH - swH) / 2.0),
+                width: swW,
+                height: swH
+            )
 
             let hasSaveDir = !owner.autoSaveDir.isEmpty
-            let dirBtnW: CGFloat = 64
-            let dirBtnH: CGFloat = 22
-            let dirBtnY = owner.chkAutoSaveRect.minY + 1
+            let dirBtnFont = UiTheme.fontPx(11)
+            let changeText = hasSaveDir ? L10n.btnChangeDir : L10n.btnSelectDir
+            let openText = L10n.btnOpenDir
+            let changeBtnW = max(48, ceil((changeText as NSString).size(withAttributes: [.font: dirBtnFont]).width) + 16)
+            let openBtnW = max(48, ceil((openText as NSString).size(withAttributes: [.font: dirBtnFont]).width) + 16)
+            let dirBtnH: CGFloat = 20
+            let dirBtnY = floor(rowRect.minY + (topLineH - dirBtnH) / 2.0)
 
             owner.btnChangeSaveDirRect = NSRect(
-                x: owner.chkAutoSaveRect.maxX - dirBtnW,
+                x: swRect.minX - 8 - changeBtnW,
                 y: dirBtnY,
-                width: dirBtnW,
+                width: changeBtnW,
                 height: dirBtnH
             )
             owner.btnOpenSaveDirRect = hasSaveDir
                 ? NSRect(
-                    x: owner.btnChangeSaveDirRect.minX - 6 - dirBtnW,
+                    x: owner.btnChangeSaveDirRect.minX - 6 - openBtnW,
                     y: dirBtnY,
-                    width: dirBtnW,
+                    width: openBtnW,
                     height: dirBtnH
                 )
                 : .zero
@@ -288,47 +365,50 @@ public final class MainForm: NSWindow {
             let changeHover = owner.btnChangeSaveDirRect.contains(owner.mousePos)
             let openHover = hasSaveDir && owner.btnOpenSaveDirRect.contains(owner.mousePos)
             let pathHover = hasSaveDir && owner.lblAutoSavePathRect.contains(owner.mousePos)
-            let mainRowHover = owner.chkAutoSaveRect.contains(owner.mousePos)
+            let mainRowHover = rowRect.contains(owner.mousePos)
                 && !changeHover && !openHover && !pathHover
-                && owner.mousePos.y <= owner.chkAutoSaveRect.minY + 26
+                && owner.mousePos.y <= rowRect.minY + topLineH
 
-            drawCheckBoxGlyph(boxRect: boxRect, isChecked: owner.autoSave, hovered: mainRowHover)
-
-            let textX = boxRect.maxX + 8
             let rightActionLeft = hasSaveDir ? owner.btnOpenSaveDirRect.minX : owner.btnChangeSaveDirRect.minX
-            let titleW = max(60, rightActionLeft - textX - 6)
-            let lblRect = NSRect(x: textX, y: owner.chkAutoSaveRect.minY, width: titleW, height: 24)
-            let lblColor = (mainRowHover || owner.autoSave) ? UiTheme.textPrimary : UiTheme.textSecondary
-            UiTheme.drawCenteredText("自动保存", in: lblRect, font: UiTheme.fontPx(13), color: lblColor, alignment: .left)
+            let titleW = max(60, rightActionLeft - rowRect.minX - 6)
+            let lblRect = NSRect(x: rowRect.minX, y: rowRect.minY, width: titleW, height: topLineH)
+            UiTheme.drawCenteredText(
+                L10n.autoSaveLabel,
+                in: lblRect,
+                font: NSFont.systemFont(ofSize: 13, weight: .regular),
+                color: UiTheme.textPrimary,
+                alignment: .left,
+                lineBreakMode: .byTruncatingTail
+            )
 
-            let dirBtnFont = UiTheme.fontPx(11)
             if hasSaveDir {
-                drawSmallDirButton(rect: owner.btnOpenSaveDirRect, text: "打开目录", hovered: openHover, font: dirBtnFont)
+                drawSmallDirButton(rect: owner.btnOpenSaveDirRect, text: openText, hovered: openHover, font: dirBtnFont)
             }
             drawSmallDirButton(
                 rect: owner.btnChangeSaveDirRect,
-                text: hasSaveDir ? "更改目录" : "选择目录",
+                text: changeText,
                 hovered: changeHover,
                 font: dirBtnFont
             )
 
-            let noteY = owner.chkAutoSaveRect.minY + 26
-            let noteW = owner.chkAutoSaveRect.width - boxSz - 8
-            let noteRect = NSRect(x: textX, y: noteY, width: noteW, height: 20)
+            drawToggleSwitch(rect: swRect, isChecked: owner.autoSave, hovered: mainRowHover)
+
+            let noteY = rowRect.minY + topLineH - 1
+            let noteRect = NSRect(x: rowRect.minX, y: noteY, width: rowRect.width, height: 19)
 
             if !hasSaveDir {
                 owner.lblAutoSavePathRect = .zero
                 UiTheme.drawCenteredText(
-                    "未指定目录，开启前需先选择可写文件夹",
+                    L10n.autoSaveNoDirNote,
                     in: noteRect,
                     font: UiTheme.fontPx(11),
-                    color: UiTheme.textSecondary,
+                    color: UiTheme.textSecondary.withAlphaComponent(0.78),
                     alignment: .left
                 )
             } else {
                 owner.lblAutoSavePathRect = noteRect
-                let pathLine = "目录 : \(owner.autoSaveDir)"
-                let pathColor = pathHover ? UiTheme.weChatGreen : UiTheme.textSecondary
+                let pathLine = L10n.autoSaveDirPrefix(owner.autoSaveDir)
+                let pathColor = pathHover ? UiTheme.weChatGreen : UiTheme.textSecondary.withAlphaComponent(0.85)
                 UiTheme.drawCenteredText(
                     pathLine,
                     in: noteRect,
@@ -341,34 +421,45 @@ public final class MainForm: NSWindow {
         }
 
         private func drawSmallDirButton(rect: NSRect, text: String, hovered: Bool, font: NSFont) {
-            let fill = hovered ? UiTheme.bgCardHover : UiTheme.bgCard
+            let fill = hovered ? UiTheme.bgCardHover : UiTheme.bgDark
             let border = hovered ? UiTheme.weChatGreen : UiTheme.borderSubtle
             let fg = hovered ? UiTheme.textPrimary : UiTheme.textSecondary
-            UiTheme.fillAndStrokeRoundedRect(rect, radius: 4, fillColor: fill, strokeColor: border, lineWidth: 1.0)
+            UiTheme.fillAndStrokeRoundedRect(rect, radius: 5, fillColor: fill, strokeColor: border, lineWidth: 0.8)
             UiTheme.drawCenteredText(text, in: rect, font: font, color: fg, alignment: .center)
         }
 
-        private func drawCheckBoxGlyph(boxRect: NSRect, isChecked: Bool, hovered: Bool) {
+        private func drawToggleSwitch(rect: NSRect, isChecked: Bool, hovered: Bool) {
+            let radius = rect.height / 2.0
             if isChecked {
-                UiTheme.fillRoundedRect(boxRect, radius: 4, color: UiTheme.weChatGreen)
-                NSColor.white.setStroke()
-                let checkPath = NSBezierPath()
-                checkPath.lineWidth = 1.6
-                checkPath.lineCapStyle = .round
-                let cx = boxRect.midX
-                let cy = boxRect.midY
-                checkPath.move(to: NSPoint(x: cx - 4, y: cy))
-                checkPath.line(to: NSPoint(x: cx - 1, y: cy + 3))
-                checkPath.line(to: NSPoint(x: cx + 4, y: cy - 3))
-                checkPath.stroke()
+                let trackColor = hovered ? UiTheme.lighten(UiTheme.weChatGreen, delta: 12) : UiTheme.weChatGreen
+                UiTheme.fillRoundedRect(rect, radius: radius, color: trackColor)
             } else {
-                UiTheme.fillAndStrokeRoundedRect(
-                    boxRect,
-                    radius: 4,
-                    fillColor: UiTheme.bgCard,
-                    strokeColor: hovered ? UiTheme.weChatGreen : UiTheme.borderSubtle,
-                    lineWidth: 1.0
+                let offFill = UiTheme.isDarkMode
+                    ? NSColor(srgbRed: 1, green: 1, blue: 1, alpha: hovered ? 0.22 : 0.15)
+                    : NSColor(srgbRed: 0, green: 0, blue: 0, alpha: hovered ? 0.16 : 0.10)
+                let offStroke = UiTheme.isDarkMode
+                    ? NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.12)
+                    : NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.08)
+                UiTheme.fillAndStrokeRoundedRect(rect, radius: radius, fillColor: offFill, strokeColor: offStroke, lineWidth: 0.5)
+            }
+
+            let knobD = rect.height - 4.0
+            let knobX = isChecked ? (rect.maxX - knobD - 2.0) : (rect.minX + 2.0)
+            let knobRect = NSRect(x: knobX, y: rect.minY + 2.0, width: knobD, height: knobD)
+
+            if let ctx = NSGraphicsContext.current?.cgContext {
+                ctx.saveGState()
+                ctx.setShadow(
+                    offset: CGSize(width: 0, height: -0.8),
+                    blur: 1.6,
+                    color: NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.28).cgColor
                 )
+                ctx.setFillColor(NSColor.white.cgColor)
+                ctx.fillEllipse(in: knobRect)
+                ctx.restoreGState()
+            } else {
+                NSColor.white.setFill()
+                NSBezierPath(ovalIn: knobRect).fill()
             }
         }
 
@@ -395,7 +486,7 @@ public final class MainForm: NSWindow {
 
             if owner.pullingUpdate {
                 let ver = owner.availableUpdate?.latestVersion ?? ""
-                let status = "正在拉取 v\(ver)... \(owner.pullProgress)%"
+                let status = L10n.pullingUpdate(ver, owner.pullProgress)
                 UiTheme.drawCenteredText(
                     status,
                     in: owner.bottomStatusRowRect,
@@ -419,7 +510,7 @@ public final class MainForm: NSWindow {
 
             if owner.checkingUpdate {
                 UiTheme.drawCenteredText(
-                    "正在检查更新...",
+                    L10n.checkingUpdate,
                     in: owner.bottomStatusRowRect,
                     font: subFont,
                     color: UiTheme.textSecondary,
@@ -429,9 +520,9 @@ public final class MainForm: NSWindow {
             }
 
             if let avail = owner.availableUpdate, avail.isNewer {
-                let prefix = "发现新版本 v\(avail.latestVersion) · "
-                let actionText = avail.downloadUrl.isEmpty ? "前往下载" : "拉取更新"
-                let ignoreText = "忽略"
+                let prefix = L10n.newVersionFoundPrefix(avail.latestVersion)
+                let actionText = avail.downloadUrl.isEmpty ? L10n.goToDownload : L10n.pullUpdateNow
+                let ignoreText = L10n.ignoreUpdate
 
                 let prefixSz = (prefix as NSString).size(withAttributes: [.font: subFont])
                 let actionSz = (actionText as NSString).size(withAttributes: [.font: subFont])
@@ -466,7 +557,7 @@ public final class MainForm: NSWindow {
                 return
             }
 
-            let checkText = "检查更新"
+            let checkText = L10n.checkUpdate
             let csz = (checkText as NSString).size(withAttributes: [.font: subFont])
             let cw = ceil(csz.width) + 12
             owner.lnkUpdateActionRect = NSRect(
@@ -475,9 +566,87 @@ public final class MainForm: NSWindow {
                 width: cw,
                 height: owner.bottomStatusRowRect.height
             )
-            let hover = owner.lnkUpdateActionRect.contains(owner.mousePos)
+            let hover = !owner.isLanguageMenuOpen && owner.lnkUpdateActionRect.contains(owner.mousePos)
             let linkColor = hover ? UiTheme.lighten(UiTheme.linkBlue, delta: 24) : UiTheme.linkBlue
             UiTheme.drawCenteredText(checkText, in: owner.lnkUpdateActionRect, font: subFont, color: linkColor, alignment: .center)
+        }
+
+        private func drawLanguagePopupOverlay(owner: MainForm) {
+            let popup = owner.langPopupRect
+            let radius: CGFloat = 10.0
+
+            if let ctx = NSGraphicsContext.current?.cgContext {
+                ctx.saveGState()
+                ctx.setShadow(
+                    offset: CGSize(width: 0, height: -5.0),
+                    blur: 16.0,
+                    color: NSColor(srgbRed: 0, green: 0, blue: 0, alpha: UiTheme.isDarkMode ? 0.48 : 0.18).cgColor
+                )
+                let path = NSBezierPath(roundedRect: popup, xRadius: radius, yRadius: radius)
+                UiTheme.bgCard.setFill()
+                path.fill()
+                ctx.restoreGState()
+            }
+
+            UiTheme.fillAndStrokeRoundedRect(
+                popup,
+                radius: radius,
+                fillColor: UiTheme.bgCard,
+                strokeColor: UiTheme.borderSubtle,
+                lineWidth: 0.8
+            )
+
+            let langs = AppLanguage.allCases
+            let rowH: CGFloat = 28.0
+            for (idx, lang) in langs.enumerated() {
+                let rowRect = NSRect(
+                    x: popup.minX + 6.0,
+                    y: popup.minY + 6.0 + CGFloat(idx) * rowH,
+                    width: popup.width - 12.0,
+                    height: rowH
+                )
+                let isSelected = (lang == L10n.current)
+                let isHovered = rowRect.contains(owner.mousePos)
+
+                if isHovered {
+                    UiTheme.fillRoundedRect(
+                        rowRect,
+                        radius: 6.0,
+                        color: UiTheme.weChatGreen.withAlphaComponent(UiTheme.isDarkMode ? 0.22 : 0.12)
+                    )
+                }
+
+                if isSelected, let ctx = NSGraphicsContext.current?.cgContext {
+                    ctx.saveGState()
+                    ctx.setStrokeColor(UiTheme.weChatGreen.cgColor)
+                    ctx.setLineWidth(1.8)
+                    ctx.setLineCap(.round)
+                    ctx.setLineJoin(.round)
+                    let cx = rowRect.minX + 13.0
+                    let cy = rowRect.midY
+                    ctx.move(to: CGPoint(x: cx - 4.0, y: cy + 0.5))
+                    ctx.addLine(to: CGPoint(x: cx - 1.0, y: cy + 3.5))
+                    ctx.addLine(to: CGPoint(x: cx + 4.5, y: cy - 3.0))
+                    ctx.strokePath()
+                    ctx.restoreGState()
+                }
+
+                let textRect = NSRect(
+                    x: rowRect.minX + 25.0,
+                    y: rowRect.minY,
+                    width: rowRect.width - 30.0,
+                    height: rowRect.height
+                )
+                let font = NSFont.systemFont(ofSize: 12.5, weight: isSelected ? .semibold : .regular)
+                let textColor = isSelected ? UiTheme.weChatGreen : UiTheme.textPrimary
+                UiTheme.drawCenteredText(
+                    lang.displayName,
+                    in: textRect,
+                    font: font,
+                    color: textColor,
+                    alignment: .left
+                )
+            }
         }
 
         override func mouseMoved(with event: NSEvent) {
@@ -485,20 +654,31 @@ public final class MainForm: NSWindow {
             let pt = convert(event.locationInWindow, from: nil)
             owner.mousePos = pt
 
+            if owner.isLanguageMenuOpen {
+                let inPopupOrBtn = owner.langPopupRect.contains(pt) || owner.btnLangRect.contains(pt)
+                if inPopupOrBtn {
+                    NSCursor.pointingHand.set()
+                } else {
+                    NSCursor.arrow.set()
+                }
+                needsDisplay = true
+                return
+            }
+
             let hasSaveDir = !owner.autoSaveDir.isEmpty
             let inAutoSaveHit = owner.btnChangeSaveDirRect.contains(pt)
                 || (hasSaveDir && owner.btnOpenSaveDirRect.contains(pt))
                 || (hasSaveDir && owner.lblAutoSavePathRect.contains(pt))
-                || (owner.chkAutoSaveRect.contains(pt) && pt.y <= owner.chkAutoSaveRect.minY + 26)
+                || (owner.chkAutoSaveRect.contains(pt) && pt.y <= owner.chkAutoSaveRect.minY + 34)
             let inUpdateHit = !owner.checkingUpdate && !owner.pullingUpdate
                 && (owner.lnkUpdateActionRect.contains(pt) || owner.lnkIgnoreUpdateRect.contains(pt))
 
-            let clickable = owner.btnMinimizeRect.contains(pt)
-                || owner.btnCloseRect.contains(pt)
+            let clickable = owner.btnLangRect.contains(pt)
                 || owner.btnCaptureRect.contains(pt)
                 || owner.chkKeepAliveRect.contains(pt)
                 || owner.chkHideStatusBarRect.contains(pt)
                 || owner.chkAutoStartRect.contains(pt)
+                || owner.chkWindowShadowRect.contains(pt)
                 || owner.chkQuickCopyRect.contains(pt)
                 || inAutoSaveHit
                 || inUpdateHit
@@ -522,6 +702,13 @@ public final class MainForm: NSWindow {
             guard let owner = owner else { return }
             let pt = convert(event.locationInWindow, from: nil)
 
+            if owner.btnLangRect.contains(pt) {
+                owner.isRecordingHotkey = false
+                needsDisplay = true
+                owner.popUpLanguageMenu(from: self)
+                return
+            }
+
             if owner.btnHotkeyBadgeRect.contains(pt) {
                 owner.isRecordingHotkey.toggle()
                 window?.makeFirstResponder(self)
@@ -532,20 +719,6 @@ public final class MainForm: NSWindow {
             if owner.isRecordingHotkey {
                 owner.isRecordingHotkey = false
                 needsDisplay = true
-            }
-
-            if owner.btnMinimizeRect.contains(pt) {
-                owner.minimizeToTray()
-                return
-            }
-
-            if owner.btnCloseRect.contains(pt) {
-                if owner.keepInBackground {
-                    owner.minimizeToTray()
-                } else {
-                    NSApp.terminate(nil)
-                }
-                return
             }
 
             if owner.headerRect.contains(pt) {
@@ -577,6 +750,12 @@ public final class MainForm: NSWindow {
                 return
             }
 
+            if owner.chkWindowShadowRect.contains(pt) {
+                owner.setWindowShadowCapture(!owner.windowShadowCapture)
+                needsDisplay = true
+                return
+            }
+
             if owner.chkQuickCopyRect.contains(pt) {
                 owner.setQuickCopyOnly(!owner.quickCopyOnly)
                 needsDisplay = true
@@ -598,7 +777,7 @@ public final class MainForm: NSWindow {
                 return
             }
 
-            if owner.chkAutoSaveRect.contains(pt) && pt.y <= owner.chkAutoSaveRect.minY + 26 {
+            if owner.chkAutoSaveRect.contains(pt) && pt.y <= owner.chkAutoSaveRect.minY + 34 {
                 owner.toggleAutoSave()
                 return
             }
@@ -634,6 +813,11 @@ public final class MainForm: NSWindow {
 
         override func keyDown(with event: NSEvent) {
             guard let owner = owner else { return }
+            if owner.isLanguageMenuOpen && event.keyCode == 53 {
+                owner.isLanguageMenuOpen = false
+                needsDisplay = true
+                return
+            }
             if owner.isRecordingHotkey {
                 if event.keyCode == 53 { // Esc cancels recording
                     owner.isRecordingHotkey = false
@@ -661,6 +845,7 @@ public final class MainForm: NSWindow {
         let prefs = AppSettings.loadPreferences()
         self.keepInBackground = prefs.keepInBackground
         self.hideStatusBarIcon = prefs.hideStatusBarIcon
+        self.windowShadowCapture = prefs.windowShadowCapture
         self.quickCopyOnly = prefs.quickCopyOnly
         self.autoSave = prefs.autoSave
         self.autoSaveDir = prefs.autoSaveDir
@@ -673,8 +858,8 @@ public final class MainForm: NSWindow {
             self.hotkeyDisplay = savedLabel
         }
 
-        let w: CGFloat = 318
-        let h: CGFloat = 340
+        let w: CGFloat = 356
+        let h: CGFloat = 438
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let frame = NSRect(
             x: screen.origin.x + (screen.width - w) / 2.0,
@@ -685,19 +870,33 @@ public final class MainForm: NSWindow {
 
         super.init(
             contentRect: frame,
-            styleMask: [.borderless],
+            styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
 
         MainForm.shared = self
-        self.isOpaque = false
-        self.backgroundColor = .clear
+        self.titlebarAppearsTransparent = true
+        self.titleVisibility = .hidden
+        let unifiedToolbar = NSToolbar(identifier: "SpanShotMainToolbar")
+        unifiedToolbar.allowsUserCustomization = false
+        self.toolbar = unifiedToolbar
+        self.toolbarStyle = .unified
+        self.appearance = NSAppearance(named: UiTheme.isDarkMode ? .darkAqua : .aqua)
+        self.isOpaque = true
+        self.backgroundColor = UiTheme.bgDark
         self.hasShadow = true
         self.sharingType = .none
         self.isReleasedWhenClosed = false
         self.acceptsMouseMovedEvents = true
+        self.delegate = self
         self.title = "SpanShot"
+
+        self.standardWindowButton(.zoomButton)?.isEnabled = false
+        if let minBtn = self.standardWindowButton(.miniaturizeButton) {
+            minBtn.target = self
+            minBtn.action = #selector(onNativeMinimizeClicked)
+        }
 
         computeLayout(width: w, height: h)
 
@@ -713,31 +912,65 @@ public final class MainForm: NSWindow {
             object: nil,
             queue: .main
         ) { [weak self] _ in
+            guard let self = self else { return }
             UiTheme.refreshSystemTheme()
-            self?.contentView?.needsDisplay = true
+            self.appearance = NSAppearance(named: UiTheme.isDarkMode ? .darkAqua : .aqua)
+            self.backgroundColor = UiTheme.bgDark
+            self.contentView?.needsDisplay = true
         }
     }
 
     override public var canBecomeKey: Bool { true }
     override public var canBecomeMain: Bool { true }
 
+    public func windowShouldClose(_ sender: NSWindow) -> Bool {
+        if keepInBackground {
+            minimizeToTray()
+        } else {
+            NSApp.terminate(nil)
+        }
+        return false
+    }
+
+    @objc private func onNativeMinimizeClicked() {
+        minimizeToTray()
+    }
+
     private func computeLayout(width w: CGFloat, height h: CGFloat) {
-        let padX: CGFloat = 16
+        let padX: CGFloat = 19
         let fullW = w - padX * 2
+        let innerX = padX + 14
+        let innerW = fullW - 28
 
-        headerRect = NSRect(x: 0, y: 0, width: w - 76, height: 44)
-        btnMinimizeRect = NSRect(x: w - 66, y: 10, width: 26, height: 24)
-        btnCloseRect = NSRect(x: w - 36, y: 10, width: 26, height: 24)
+        // Unified 52pt header bar: left traffic lights at x=19, centerY=26; right Globe button at x=w-19-26, centerY=26
+        btnLangRect = NSRect(x: w - padX - 26, y: 13, width: 26, height: 26)
+        let popupW: CGFloat = 148
+        let popupH: CGFloat = CGFloat(AppLanguage.allCases.count) * 28.0 + 12.0
+        langPopupRect = NSRect(x: w - padX - popupW, y: 44, width: popupW, height: popupH)
+        headerRect = NSRect(x: 84, y: 0, width: w - 84 - 48, height: 50)
+        btnMinimizeRect = .zero
+        btnCloseRect = .zero
 
-        btnCaptureRect = NSRect(x: padX, y: 48, width: fullW, height: 46)
-        btnHotkeyBadgeRect = NSRect(x: padX + fullW - 82, y: 48 + (46 - 26) / 2, width: 70, height: 26)
+        // Primary Capture Action
+        btnCaptureRect = NSRect(x: padX, y: 52, width: fullW, height: 44)
+        btnHotkeyBadgeRect = NSRect(x: padX + fullW - 84, y: 52 + (44 - 26) / 2, width: 72, height: 26)
 
-        chkKeepAliveRect = NSRect(x: padX, y: 106, width: fullW, height: 26)
-        chkHideStatusBarRect = NSRect(x: padX, y: 136, width: fullW, height: 26)
-        chkAutoStartRect = NSRect(x: padX, y: 166, width: fullW, height: 26)
-        chkQuickCopyRect = NSRect(x: padX, y: 196, width: fullW, height: 44)
-        chkAutoSaveRect = NSRect(x: padX, y: 246, width: fullW, height: 50)
-        bottomStatusRowRect = NSRect(x: padX, y: 306, width: fullW, height: 22)
+        // Section 1: 「截图与保存」 (Capture & Save)
+        lblCaptureSectionRect = NSRect(x: padX + 4, y: 106, width: fullW - 8, height: 18)
+        captureCardRect = NSRect(x: padX, y: 126, width: fullW, height: 130)
+        chkWindowShadowRect = NSRect(x: innerX, y: 126, width: innerW, height: 36)
+        chkQuickCopyRect = NSRect(x: innerX, y: 162, width: innerW, height: 36)
+        chkAutoSaveRect = NSRect(x: innerX, y: 198, width: innerW, height: 58)
+
+        // Section 2: 「系统与后台」 (System & Background)
+        lblSystemSectionRect = NSRect(x: padX + 4, y: 266, width: fullW - 8, height: 18)
+        systemCardRect = NSRect(x: padX, y: 286, width: fullW, height: 108)
+        chkKeepAliveRect = NSRect(x: innerX, y: 286, width: innerW, height: 36)
+        chkHideStatusBarRect = NSRect(x: innerX, y: 322, width: innerW, height: 36)
+        chkAutoStartRect = NSRect(x: innerX, y: 358, width: innerW, height: 36)
+
+        // Bottom Status & Update Row
+        bottomStatusRowRect = NSRect(x: padX, y: 404, width: fullW, height: 24)
     }
 
     public static func tryShowInlineNotice(message: String, color: NSColor) -> Bool {
@@ -774,6 +1007,7 @@ public final class MainForm: NSWindow {
         AppSettings.savePreferences(
             keepInBackground: keepInBackground,
             hideStatusBarIcon: hideStatusBarIcon,
+            windowShadowCapture: windowShadowCapture,
             quickCopyOnly: quickCopyOnly,
             autoSave: autoSave,
             autoSaveDir: autoSaveDir
@@ -782,7 +1016,15 @@ public final class MainForm: NSWindow {
 
     fileprivate func minimizeToTray() {
         isRecordingHotkey = false
+        isLanguageMenuOpen = false
         self.orderOut(nil)
+    }
+
+    public func windowDidResignKey(_ notification: Notification) {
+        if isLanguageMenuOpen {
+            isLanguageMenuOpen = false
+            contentView?.needsDisplay = true
+        }
     }
 
     fileprivate func setKeepInBackground(_ val: Bool) {
@@ -803,7 +1045,18 @@ public final class MainForm: NSWindow {
         menuHideStatusBarItem?.state = val ? .on : .off
         contentView?.needsDisplay = true
         notifyFeedback(
-            val ? "已隐藏顶部状态栏图标（后台仍常驻运行）" : "已恢复显示顶部状态栏图标",
+            L10n.statusBarHiddenNotice(val),
+            color: UiTheme.weChatGreen
+        )
+    }
+
+    fileprivate func setWindowShadowCapture(_ val: Bool) {
+        windowShadowCapture = val
+        saveCurrentPreferences()
+        menuWindowShadowItem?.state = val ? .on : .off
+        contentView?.needsDisplay = true
+        notifyFeedback(
+            L10n.windowShadowNotice(val),
             color: UiTheme.weChatGreen
         )
     }
@@ -821,9 +1074,9 @@ public final class MainForm: NSWindow {
             autoStart = next
             menuAutoStartItem?.state = next ? .on : .off
             contentView?.needsDisplay = true
-            notifyFeedback(next ? "已开启开机自启" : "已关闭开机自启", color: UiTheme.weChatGreen)
+            notifyFeedback(L10n.autoStartNotice(next), color: UiTheme.weChatGreen)
         } else {
-            notifyFeedback("设置开机自启失败", color: UiTheme.accentRed)
+            notifyFeedback(L10n.autoStartFailedNotice, color: UiTheme.accentRed)
         }
     }
 
@@ -834,7 +1087,7 @@ public final class MainForm: NSWindow {
                 return
             }
             if !AppSettings.validateWritableFolder(autoSaveDir) {
-                notifyFeedback("保存目录不存在或无写入权限，请重选", color: UiTheme.accentRed)
+                notifyFeedback(L10n.saveDirInvalidNotice, color: UiTheme.accentRed)
                 chooseAutoSaveDirectory(enableAfterSelect: true)
                 return
             }
@@ -842,13 +1095,13 @@ public final class MainForm: NSWindow {
             saveCurrentPreferences()
             menuAutoSaveItem?.state = .on
             contentView?.needsDisplay = true
-            notifyFeedback("已开启自动保存", color: UiTheme.weChatGreen)
+            notifyFeedback(L10n.autoSaveEnabledNotice, color: UiTheme.weChatGreen)
         } else {
             autoSave = false
             saveCurrentPreferences()
             menuAutoSaveItem?.state = .off
             contentView?.needsDisplay = true
-            notifyFeedback("已关闭自动保存", color: UiTheme.textSecondary)
+            notifyFeedback(L10n.autoSaveDisabledNotice, color: UiTheme.textSecondary)
         }
     }
 
@@ -857,7 +1110,7 @@ public final class MainForm: NSWindow {
             return
         }
         if !AppSettings.validateWritableFolder(selected) {
-            notifyFeedback("所选文件夹无写入权限，请更换目录", color: UiTheme.accentRed)
+            notifyFeedback(L10n.chosenDirNotWritableNotice, color: UiTheme.accentRed)
             return
         }
         autoSaveDir = selected
@@ -867,7 +1120,7 @@ public final class MainForm: NSWindow {
         saveCurrentPreferences()
         menuAutoSaveItem?.state = autoSave ? .on : .off
         contentView?.needsDisplay = true
-        notifyFeedback("保存目录已更新", color: UiTheme.weChatGreen)
+        notifyFeedback(L10n.saveDirUpdatedNotice, color: UiTheme.weChatGreen)
     }
 
     fileprivate func openAutoSaveDirectory() {
@@ -875,7 +1128,7 @@ public final class MainForm: NSWindow {
         guard !autoSaveDir.isEmpty,
               FileManager.default.fileExists(atPath: autoSaveDir, isDirectory: &isDir),
               isDir.boolValue else {
-            notifyFeedback("目录不存在，请重新选择", color: UiTheme.accentRed)
+            notifyFeedback(L10n.dirNotFoundNotice, color: UiTheme.accentRed)
             return
         }
         NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: autoSaveDir)
@@ -893,14 +1146,14 @@ public final class MainForm: NSWindow {
                 guard let self = self else { return }
                 self.checkingUpdate = false
                 if !result.success {
-                    let msg = result.errorMessage.isEmpty ? "检查更新失败" : result.errorMessage
+                    let msg = result.errorMessage.isEmpty ? L10n.checkUpdateFailedNotice : result.errorMessage
                     self.notifyFeedback(msg, color: UiTheme.accentRed)
                 } else if result.isNewer {
                     self.availableUpdate = result
                     self.noticeText = ""
                 } else {
                     self.availableUpdate = nil
-                    self.notifyFeedback("当前已是最新版本 (v\(UpdateManager.currentVersion))", color: UiTheme.weChatGreen)
+                    self.notifyFeedback(L10n.alreadyLatestVersionNotice(UpdateManager.currentVersion), color: UiTheme.weChatGreen)
                 }
                 self.contentView?.needsDisplay = true
             }
@@ -935,7 +1188,7 @@ public final class MainForm: NSWindow {
                     self.contentView?.needsDisplay = true
                     if ok {
                         self.notifyFeedback(msg, color: UiTheme.weChatGreen)
-                        if msg.contains("重启") {
+                        if msg.contains("重启") || msg.contains("重啟") || msg.lowercased().contains("restarting") {
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                                 NSApp.terminate(nil)
                             }
@@ -948,82 +1201,213 @@ public final class MainForm: NSWindow {
         )
     }
 
+    fileprivate func popUpLanguageMenu(from view: NSView) {
+        let menu = NSMenu()
+        for lang in AppLanguage.allCases {
+            let item = NSMenuItem(title: lang.displayName, action: #selector(onSelectLanguageItem(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = lang.rawValue
+            item.state = (lang == L10n.current) ? .on : .off
+            menu.addItem(item)
+        }
+        menu.update()
+        let menuW = max(138.0, ceil(menu.size.width))
+        let x = max(19.0, btnLangRect.maxX - menuW)
+        let y = btnLangRect.maxY + 4.0
+        menu.popUp(positioning: nil, at: NSPoint(x: x, y: y), in: view)
+    }
+
+    @objc private func onSelectLanguageItem(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let lang = AppLanguage.fromCode(raw) else { return }
+        applyLanguage(lang)
+    }
+
+    private func applyLanguage(_ lang: AppLanguage) {
+        L10n.setLanguage(lang)
+        saveCurrentPreferences()
+        rebuildStatusMenu()
+        Self.rebuildApplicationMainMenu(mainForm: self)
+        contentView?.needsDisplay = true
+        showInlineNotice(message: L10n.languageSwitchedNotice(lang), color: UiTheme.weChatGreen)
+    }
+
     private func setupStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let btn = item.button {
             btn.image = AppIconRenderer.renderStatusBarTemplateIcon()
             btn.imagePosition = .imageOnly
-            btn.toolTip = "SpanShot — 跨屏横纵长截图 (\(hotkeyDisplay))"
         }
+        self.statusItem = item
+        rebuildStatusMenu()
+        item.isVisible = !hideStatusBarIcon
+    }
+
+    private func rebuildStatusMenu() {
+        guard let item = statusItem else { return }
+        item.button?.toolTip = L10n.statusTooltip(hotkeyDisplay)
 
         let menu = NSMenu()
 
-        let captureItem = NSMenuItem(title: "开始截图 (\(hotkeyDisplay))", action: #selector(onMenuCapture), keyEquivalent: "")
+        let captureItem = NSMenuItem(title: L10n.menuStartCapture(hotkeyDisplay), action: #selector(onMenuCapture), keyEquivalent: "")
         captureItem.target = self
         menu.addItem(captureItem)
         self.menuCaptureItem = captureItem
 
-        let vScrollItem = NSMenuItem(title: "纵向长截图...", action: #selector(onMenuVerticalScroll), keyEquivalent: "")
+        let vScrollItem = NSMenuItem(title: L10n.menuVerticalScroll, action: #selector(onMenuVerticalScroll), keyEquivalent: "")
         vScrollItem.target = self
         menu.addItem(vScrollItem)
 
-        let hScrollItem = NSMenuItem(title: "横向长截图...", action: #selector(onMenuHorizontalScroll), keyEquivalent: "")
+        let hScrollItem = NSMenuItem(title: L10n.menuHorizontalScroll, action: #selector(onMenuHorizontalScroll), keyEquivalent: "")
         hScrollItem.target = self
         menu.addItem(hScrollItem)
 
         menu.addItem(.separator())
 
-        let quickItem = NSMenuItem(title: "快捷截图（只复制不弹窗）", action: #selector(onMenuToggleQuickCopy), keyEquivalent: "")
+        let winShadowItem = NSMenuItem(title: L10n.menuWindowShadow, action: #selector(onMenuToggleWindowShadow), keyEquivalent: "")
+        winShadowItem.target = self
+        winShadowItem.state = windowShadowCapture ? .on : .off
+        menu.addItem(winShadowItem)
+        self.menuWindowShadowItem = winShadowItem
+
+        let quickItem = NSMenuItem(title: L10n.menuQuickCopy, action: #selector(onMenuToggleQuickCopy), keyEquivalent: "")
         quickItem.target = self
         quickItem.state = quickCopyOnly ? .on : .off
         menu.addItem(quickItem)
         self.menuQuickCopyItem = quickItem
 
-        let autoSaveItem = NSMenuItem(title: "自动保存截图", action: #selector(onMenuToggleAutoSave), keyEquivalent: "")
+        let autoSaveItem = NSMenuItem(title: L10n.menuAutoSave, action: #selector(onMenuToggleAutoSave), keyEquivalent: "")
         autoSaveItem.target = self
         autoSaveItem.state = autoSave ? .on : .off
         menu.addItem(autoSaveItem)
         self.menuAutoSaveItem = autoSaveItem
 
-        let pickDirItem = NSMenuItem(title: "选择自动保存目录...", action: #selector(onMenuPickAutoSaveDir), keyEquivalent: "")
+        let pickDirItem = NSMenuItem(title: L10n.menuPickAutoSaveDir, action: #selector(onMenuPickAutoSaveDir), keyEquivalent: "")
         pickDirItem.target = self
         menu.addItem(pickDirItem)
 
-        let autoStartItem = NSMenuItem(title: "开机自启", action: #selector(onMenuToggleAutoStart), keyEquivalent: "")
-        autoStartItem.target = self
-        autoStartItem.state = autoStart ? .on : .off
-        menu.addItem(autoStartItem)
-        self.menuAutoStartItem = autoStartItem
+        menu.addItem(.separator())
 
-        let keepItem = NSMenuItem(title: "常驻后台", action: #selector(onMenuToggleKeepAlive), keyEquivalent: "")
+        let keepItem = NSMenuItem(title: L10n.menuKeepAlive, action: #selector(onMenuToggleKeepAlive), keyEquivalent: "")
         keepItem.target = self
         keepItem.state = keepInBackground ? .on : .off
         menu.addItem(keepItem)
         self.menuKeepAliveItem = keepItem
 
-        let hideBarItem = NSMenuItem(title: "隐藏顶部状态栏图标", action: #selector(onMenuToggleHideStatusBar), keyEquivalent: "")
+        let hideBarItem = NSMenuItem(title: L10n.menuHideStatusBar, action: #selector(onMenuToggleHideStatusBar), keyEquivalent: "")
         hideBarItem.target = self
         hideBarItem.state = hideStatusBarIcon ? .on : .off
         menu.addItem(hideBarItem)
         self.menuHideStatusBarItem = hideBarItem
 
+        let autoStartItem = NSMenuItem(title: L10n.menuAutoStart, action: #selector(onMenuToggleAutoStart), keyEquivalent: "")
+        autoStartItem.target = self
+        autoStartItem.state = autoStart ? .on : .off
+        menu.addItem(autoStartItem)
+        self.menuAutoStartItem = autoStartItem
+
+        let langRootItem = NSMenuItem(title: L10n.menuLanguage, action: nil, keyEquivalent: "")
+        let langSubmenu = NSMenu(title: L10n.menuLanguage)
+        for lang in AppLanguage.allCases {
+            let lItem = NSMenuItem(title: lang.displayName, action: #selector(onSelectLanguageItem(_:)), keyEquivalent: "")
+            lItem.target = self
+            lItem.representedObject = lang.rawValue
+            lItem.state = (lang == L10n.current) ? .on : .off
+            langSubmenu.addItem(lItem)
+        }
+        langRootItem.submenu = langSubmenu
+        menu.addItem(langRootItem)
+
         menu.addItem(.separator())
 
-        let updateItem = NSMenuItem(title: "检查更新...", action: #selector(onMenuCheckUpdate), keyEquivalent: "")
+        let updateItem = NSMenuItem(title: L10n.menuCheckUpdate, action: #selector(onMenuCheckUpdate), keyEquivalent: "")
         updateItem.target = self
         menu.addItem(updateItem)
 
-        let showItem = NSMenuItem(title: "显示主窗口", action: #selector(onMenuShowMain), keyEquivalent: "")
+        let showItem = NSMenuItem(title: L10n.menuShowMain, action: #selector(onMenuShowMain), keyEquivalent: "")
         showItem.target = self
         menu.addItem(showItem)
 
-        let quitItem = NSMenuItem(title: "彻底退出 SpanShot", action: #selector(onMenuQuit), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: L10n.menuQuitApp, action: #selector(onMenuQuit), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
 
         item.menu = menu
-        item.isVisible = !hideStatusBarIcon
-        self.statusItem = item
+    }
+
+    public static func rebuildApplicationMainMenu(mainForm: MainForm) {
+        let mainMenu = NSMenu()
+
+        // 1. Application Menu
+        let appMenuItem = NSMenuItem()
+        mainMenu.addItem(appMenuItem)
+        let appMenu = NSMenu()
+        appMenuItem.submenu = appMenu
+
+        let aboutItem = NSMenuItem(
+            title: L10n.tr("关于 SpanShot", "關於 SpanShot", "About SpanShot"),
+            action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
+            keyEquivalent: ""
+        )
+        appMenu.addItem(aboutItem)
+        appMenu.addItem(.separator())
+
+        let captureItem = NSMenuItem(title: L10n.startCapture, action: #selector(MainForm.onMenuCapture), keyEquivalent: "A")
+        captureItem.keyEquivalentModifierMask = [.command, .shift]
+        captureItem.target = mainForm
+        appMenu.addItem(captureItem)
+
+        let vScrollItem = NSMenuItem(title: L10n.titleVerticalScroll, action: #selector(MainForm.onMenuVerticalScroll), keyEquivalent: "")
+        vScrollItem.target = mainForm
+        appMenu.addItem(vScrollItem)
+
+        let hScrollItem = NSMenuItem(title: L10n.titleHorizontalScroll, action: #selector(MainForm.onMenuHorizontalScroll), keyEquivalent: "")
+        hScrollItem.target = mainForm
+        appMenu.addItem(hScrollItem)
+
+        appMenu.addItem(.separator())
+
+        let hideItem = NSMenuItem(
+            title: L10n.tr("隐藏 SpanShot", "隱藏 SpanShot", "Hide SpanShot"),
+            action: #selector(NSApplication.hide(_:)),
+            keyEquivalent: "h"
+        )
+        appMenu.addItem(hideItem)
+
+        let quitItem = NSMenuItem(
+            title: L10n.tr("退出 SpanShot", "退出 SpanShot", "Quit SpanShot"),
+            action: #selector(NSApplication.terminate(_:)),
+            keyEquivalent: "q"
+        )
+        appMenu.addItem(quitItem)
+
+        // 2. Edit Menu
+        let editMenuItem = NSMenuItem()
+        mainMenu.addItem(editMenuItem)
+        let editMenu = NSMenu(title: L10n.tr("编辑", "編輯", "Edit"))
+        editMenuItem.submenu = editMenu
+
+        editMenu.addItem(withTitle: L10n.tr("撤销", "復原", "Undo"), action: Selector(("undo:")), keyEquivalent: "z")
+        editMenu.addItem(.separator())
+        editMenu.addItem(withTitle: L10n.tr("剪切", "剪下", "Cut"), action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: L10n.tr("复制", "複製", "Copy"), action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: L10n.tr("粘贴", "貼上", "Paste"), action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(withTitle: L10n.tr("全选", "全選", "Select All"), action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+
+        // 3. Window Menu
+        let windowMenuItem = NSMenuItem()
+        mainMenu.addItem(windowMenuItem)
+        let windowMenu = NSMenu(title: L10n.tr("窗口", "視窗", "Window"))
+        windowMenuItem.submenu = windowMenu
+
+        let showMainItem = NSMenuItem(title: L10n.menuShowMain, action: #selector(MainForm.onMenuShowMain), keyEquivalent: "0")
+        showMainItem.target = mainForm
+        windowMenu.addItem(showMainItem)
+
+        windowMenu.addItem(withTitle: L10n.tr("最小化", "最小化", "Minimize"), action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        windowMenu.addItem(withTitle: L10n.tr("关闭窗口", "關閉視窗", "Close Window"), action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+
+        NSApp.mainMenu = mainMenu
     }
 
     private func registerGlobalHotkeys() {
@@ -1123,9 +1507,9 @@ public final class MainForm: NSWindow {
         defaults.set(self.hotkeyDisplay, forKey: Self.prefKeyHotkeyLabel)
 
         registerGlobalHotkeys()
-        menuCaptureItem?.title = "开始截图 (\(hotkeyDisplay))"
-        statusItem?.button?.toolTip = "SpanShot — 跨屏横纵长截图 (\(hotkeyDisplay))"
-        notifyFeedback("快捷键已设为 \(hotkeyDisplay)", color: UiTheme.weChatGreen)
+        menuCaptureItem?.title = L10n.menuStartCapture(hotkeyDisplay)
+        statusItem?.button?.toolTip = L10n.statusTooltip(hotkeyDisplay)
+        notifyFeedback(L10n.hotkeyUpdatedNotice(hotkeyDisplay), color: UiTheme.weChatGreen)
         return true
     }
 
@@ -1151,6 +1535,10 @@ public final class MainForm: NSWindow {
 
     @objc public func onMenuHorizontalScroll() {
         startCaptureFlow(preset: .horizontalScroll)
+    }
+
+    @objc private func onMenuToggleWindowShadow() {
+        setWindowShadowCapture(!windowShadowCapture)
     }
 
     @objc private func onMenuToggleQuickCopy() {
@@ -1185,6 +1573,8 @@ public final class MainForm: NSWindow {
 
     @objc public func onMenuShowMain() {
         UiTheme.refreshSystemTheme()
+        self.appearance = NSAppearance(named: UiTheme.isDarkMode ? .darkAqua : .aqua)
+        self.backgroundColor = UiTheme.bgDark
         NSApp.activate(ignoringOtherApps: true)
         self.makeKeyAndOrderFront(nil)
         self.contentView?.needsDisplay = true
@@ -1199,16 +1589,16 @@ public final class MainForm: NSWindow {
 
         if autoSave {
             if AppSettings.tryAutoSaveBitmap(bmp, folderPath: autoSaveDir, tag: tag) != nil {
-                notifyFeedback(String(format: "已复制并自动保存 (%d × %d)", bmp.width, bmp.height), color: UiTheme.weChatGreen)
+                notifyFeedback(L10n.copiedAndAutoSaved(bmp.width, bmp.height), color: UiTheme.weChatGreen)
             } else {
                 autoSave = false
                 saveCurrentPreferences()
                 menuAutoSaveItem?.state = .off
                 contentView?.needsDisplay = true
-                notifyFeedback("已复制（目录不可写，已关自动保存）", color: UiTheme.accentRed)
+                notifyFeedback(L10n.copiedButAutoSaveFailed, color: UiTheme.accentRed)
             }
         } else {
-            notifyFeedback(String(format: "已复制到剪贴板 (%d × %d)", bmp.width, bmp.height), color: UiTheme.weChatGreen)
+            notifyFeedback(L10n.copiedToClipboardSize(bmp.width, bmp.height), color: UiTheme.weChatGreen)
         }
     }
 
@@ -1218,23 +1608,23 @@ public final class MainForm: NSWindow {
             guard let self = self else { return }
             if self.autoSave && !closedEditor.manuallySaved {
                 if AppSettings.tryAutoSaveBitmap(closedEditor.finalWorkingBitmap, folderPath: self.autoSaveDir, tag: fileTag) != nil {
-                    self.notifyFeedback(closedEditor.confirmedCopy ? "已复制并自动保存" : "已自动保存", color: UiTheme.weChatGreen)
+                    self.notifyFeedback(closedEditor.confirmedCopy ? L10n.copiedAndAutoSavedShort : L10n.autoSavedShort, color: UiTheme.weChatGreen)
                 } else {
                     self.autoSave = false
                     self.saveCurrentPreferences()
                     self.menuAutoSaveItem?.state = .off
                     self.contentView?.needsDisplay = true
-                    self.notifyFeedback("目录不可写，已关闭自动保存", color: UiTheme.accentRed)
+                    self.notifyFeedback(L10n.dirNotWritableAutoSaveDisabled, color: UiTheme.accentRed)
                 }
             } else if !closedEditor.manuallySaved && closedEditor.confirmedCopy {
-                self.notifyFeedback("已复制到剪贴板", color: UiTheme.weChatGreen)
+                self.notifyFeedback(L10n.copiedToClipboardShort, color: UiTheme.weChatGreen)
             }
         }
     }
 
     private func saveBitmapDialog(_ bmp: RawBitmap, tag: String) {
         if UiTheme.saveBitmapDialog(bmp, tag: tag, initialDir: autoSaveDir) {
-            notifyFeedback("已保存", color: UiTheme.weChatGreen)
+            notifyFeedback(L10n.savedShort, color: UiTheme.weChatGreen)
         }
     }
 
@@ -1245,17 +1635,18 @@ public final class MainForm: NSWindow {
         case .granted:
             break
         case .promptedSystemDialog:
-            notifyFeedback("请在系统弹窗中点击允许（授权后再次点击即可截图）", color: UiTheme.accentOrange)
+            notifyFeedback(L10n.permissionPromptDialogNotice, color: UiTheme.accentOrange)
             return
         case .relaunchingWithNewPermission:
             return
         case .denied:
-            notifyFeedback("请先在系统设置中开启 SpanShot 的屏幕录制权限", color: UiTheme.accentRed)
+            notifyFeedback(L10n.permissionDeniedSettingsNotice, color: UiTheme.accentRed)
             ScreenCapturer.openScreenCaptureSettings()
             return
         }
         isCapturing = true
         isRecordingHotkey = false
+        isLanguageMenuOpen = false
 
         let wasVisible = self.isVisible
         captureWasNormalVisible = wasVisible
@@ -1270,10 +1661,10 @@ public final class MainForm: NSWindow {
     }
 
     private func presentRegionSelector(wasMainVisible: Bool, preset: CaptureActionMode) {
-        let selector = RegionSelectorForm(presetMode: preset)
+        let selector = RegionSelectorForm(presetMode: preset, windowShadowCapture: windowShadowCapture)
         if selector.captureWasBlockedByPermission {
             self.restoreMainIfNeeded(wasMainVisible)
-            self.notifyFeedback("请先在系统设置中允许屏幕录制权限", color: UiTheme.accentRed)
+            self.notifyFeedback(L10n.permissionDeniedSettingsNotice, color: UiTheme.accentRed)
             ScreenCapturer.openScreenCaptureSettings()
             return
         }
@@ -1297,7 +1688,7 @@ public final class MainForm: NSWindow {
                     if self.quickCopyOnly {
                         self.copyAndOptionalAutoSave(bmp, tag: "Shot")
                     } else {
-                        self.openPreviewAndOptionalAutoSave(bmp, titleTag: "截图", fileTag: "Shot")
+                        self.openPreviewAndOptionalAutoSave(bmp, titleTag: L10n.titleNormalShot, fileTag: "Shot")
                     }
                 }
                 self.restoreMainIfNeeded(wasMainVisible)
@@ -1344,7 +1735,7 @@ public final class MainForm: NSWindow {
                         } else if exitAction == .openEditor {
                             self.openPreviewAndOptionalAutoSave(
                                 resultBmp,
-                                titleTag: dir == .vertical ? "纵向长截图" : "横向长截图",
+                                titleTag: dir == .vertical ? L10n.titleVerticalScroll : L10n.titleHorizontalScroll,
                                 fileTag: scrollTag
                             )
                         }
@@ -1359,6 +1750,8 @@ public final class MainForm: NSWindow {
     private func restoreMainIfNeeded(_ wasMainVisible: Bool) {
         if wasMainVisible {
             UiTheme.refreshSystemTheme()
+            self.appearance = NSAppearance(named: UiTheme.isDarkMode ? .darkAqua : .aqua)
+            self.backgroundColor = UiTheme.bgDark
             self.makeKeyAndOrderFront(nil)
             self.contentView?.needsDisplay = true
         }

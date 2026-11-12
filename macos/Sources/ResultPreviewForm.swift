@@ -233,7 +233,7 @@ public final class ResultPreviewForm: NSWindow, NSWindowDelegate {
     fileprivate func saveToFile() {
         if UiTheme.saveBitmapDialog(workingBitmap, tag: captureTypeTag, initialDir: initialSaveDir) {
             manuallySaved = true
-            showInlineNotice(message: "已保存", color: UiTheme.weChatGreen)
+            showInlineNotice(message: L10n.savedShort, color: UiTheme.weChatGreen)
         }
     }
 
@@ -253,7 +253,7 @@ public final class ResultPreviewForm: NSWindow, NSWindowDelegate {
             if ch == "c" {
                 UiTheme.copyBitmapToClipboard(workingBitmap)
                 confirmedCopy = true
-                showInlineNotice(message: "已复制到剪贴板", color: UiTheme.weChatGreen)
+                showInlineNotice(message: L10n.copiedToClipboardShort, color: UiTheme.weChatGreen)
             } else if ch == "s" {
                 saveToFile()
             } else if ch == "z" {
@@ -302,16 +302,16 @@ public final class ResultPreviewForm: NSWindow, NSWindowDelegate {
                 curX += w + gap + extraGap
             }
 
-            add("pan", "浏览", 60)
-            add("rect", "方框", 60)
-            add("arrow", "箭头", 60)
-            add("pen", "画笔", 60)
-            add("crop", "裁剪", 60)
-            add("undo", "撤销", 60, extraGap: 10)
-            add("zoom", owner.fitToWindow ? "100%" : "适应窗口", 80)
-            add("pin", "钉选", 68)
-            add("save", "下载", 68)
-            add("finish", "完成", 84)
+            add("pan", L10n.previewPan, 60)
+            add("rect", L10n.previewRect, 60)
+            add("arrow", L10n.previewArrow, 60)
+            add("pen", L10n.previewPen, 60)
+            add("crop", L10n.previewCrop, 60)
+            add("undo", L10n.previewUndo, 60, extraGap: 10)
+            add("zoom", owner.fitToWindow ? "100%" : L10n.previewFitWindow, 80)
+            add("pin", L10n.previewPin, 68)
+            add("save", L10n.previewSave, 68)
+            add("finish", L10n.previewFinish, 84)
             return list
         }
 

@@ -354,6 +354,37 @@ public enum UiTheme {
         path.stroke()
     }
 
+    public static func drawIconGlobe(btnRect: NSRect, color: NSColor) {
+        let r: CGFloat = 7.2
+        let cx = btnRect.midX
+        let cy = btnRect.midY
+        color.setStroke()
+
+        // Outer globe circle
+        let outer = NSBezierPath(ovalIn: NSRect(x: cx - r, y: cy - r, width: r * 2, height: r * 2))
+        outer.lineWidth = 1.3
+        outer.stroke()
+
+        // Inner meridian ellipse
+        let meridianW: CGFloat = 7.0
+        let meridian = NSBezierPath(ovalIn: NSRect(x: cx - meridianW / 2, y: cy - r, width: meridianW, height: r * 2))
+        meridian.lineWidth = 1.2
+        meridian.stroke()
+
+        // Equator & latitude lines
+        let lines = NSBezierPath()
+        lines.lineWidth = 1.2
+        lines.move(to: NSPoint(x: cx - r + 0.4, y: cy))
+        lines.line(to: NSPoint(x: cx + r - 0.4, y: cy))
+        let latOffset: CGFloat = 3.7
+        let halfChord = sqrt(max(0, r * r - latOffset * latOffset)) - 0.4
+        lines.move(to: NSPoint(x: cx - halfChord, y: cy - latOffset))
+        lines.line(to: NSPoint(x: cx + halfChord, y: cy - latOffset))
+        lines.move(to: NSPoint(x: cx - halfChord, y: cy + latOffset))
+        lines.line(to: NSPoint(x: cx + halfChord, y: cy + latOffset))
+        lines.stroke()
+    }
+
     /// Renders a crisp WeChat-style tapered annotation arrow whose shaft terminates inside the arrowhead base (`neckPt`),
     /// guaranteeing the shaft never protrudes past the sharp arrowhead tip (`endPt`).
     public static func drawAnnotationArrow(from startPt: NSPoint, to endPt: NSPoint, color: NSColor, strokeWidth: CGFloat) {
@@ -437,7 +468,7 @@ public enum UiTheme {
     public static func copyBitmapWithToast(_ bmp: RawBitmap) {
         copyBitmapToClipboard(bmp)
         ToastWindow.showToast(
-            message: String(format: "已复制到剪贴板 (%d × %d)", bmp.width, bmp.height),
+            message: L10n.copiedToClipboardSize(bmp.width, bmp.height),
             accent: weChatGreen
         )
     }
@@ -463,7 +494,7 @@ public enum UiTheme {
             let data = isJpg ? bmp.jpegData() : bmp.pngData()
             if let data = data {
                 try? data.write(to: url)
-                ToastWindow.showToast(message: "已保存", accent: weChatGreen)
+                ToastWindow.showToast(message: L10n.savedShort, accent: weChatGreen)
                 return true
             }
         }

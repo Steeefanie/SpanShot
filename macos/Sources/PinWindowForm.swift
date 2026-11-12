@@ -8,6 +8,7 @@ public final class PinWindowForm: NSPanel {
 
     fileprivate let pinnedBitmap: RawBitmap
     fileprivate let pinnedNSImage: NSImage
+    fileprivate let hasTransparentCorners: Bool
     fileprivate var scaleFactor: CGFloat = 1.0
     fileprivate var dragging = false
     fileprivate var dragStartScreenPt: NSPoint = .zero
@@ -21,24 +22,39 @@ public final class PinWindowForm: NSPanel {
 
         override func draw(_ dirtyRect: NSRect) {
             guard let owner = owner else { return }
-            NSColor(srgbRed: 24 / 255.0, green: 28 / 255.0, blue: 38 / 255.0, alpha: 1.0).setFill()
-            bounds.fill()
+            if owner.hasTransparentCorners {
+                NSColor.clear.setFill()
+                bounds.fill()
 
-            NSGraphicsContext.current?.imageInterpolation = .high
-            owner.pinnedNSImage.draw(
-                in: NSRect(x: 2, y: 2, width: bounds.width - 4, height: bounds.height - 4),
-                from: .zero,
-                operation: .sourceOver,
-                fraction: 1.0,
-                respectFlipped: true,
-                hints: nil
-            )
+                NSGraphicsContext.current?.imageInterpolation = .high
+                owner.pinnedNSImage.draw(
+                    in: bounds,
+                    from: .zero,
+                    operation: .sourceOver,
+                    fraction: 1.0,
+                    respectFlipped: true,
+                    hints: nil
+                )
+            } else {
+                NSColor(srgbRed: 24 / 255.0, green: 28 / 255.0, blue: 38 / 255.0, alpha: 1.0).setFill()
+                bounds.fill()
 
-            let borderColor = NSColor(srgbRed: 0 / 255.0, green: 185 / 255.0, blue: 255 / 255.0, alpha: 1.0)
-            borderColor.setStroke()
-            let borderPath = NSBezierPath(rect: NSRect(x: 1, y: 1, width: bounds.width - 2, height: bounds.height - 2))
-            borderPath.lineWidth = 2.0
-            borderPath.stroke()
+                NSGraphicsContext.current?.imageInterpolation = .high
+                owner.pinnedNSImage.draw(
+                    in: NSRect(x: 2, y: 2, width: bounds.width - 4, height: bounds.height - 4),
+                    from: .zero,
+                    operation: .sourceOver,
+                    fraction: 1.0,
+                    respectFlipped: true,
+                    hints: nil
+                )
+
+                let borderColor = NSColor(srgbRed: 0 / 255.0, green: 185 / 255.0, blue: 255 / 255.0, alpha: 1.0)
+                borderColor.setStroke()
+                let borderPath = NSBezierPath(rect: NSRect(x: 1, y: 1, width: bounds.width - 2, height: bounds.height - 2))
+                borderPath.lineWidth = 2.0
+                borderPath.stroke()
+            }
         }
 
         override func mouseDown(with event: NSEvent) {
@@ -77,17 +93,17 @@ public final class PinWindowForm: NSPanel {
         override func rightMouseDown(with event: NSEvent) {
             guard let owner = owner else { return }
             let menu = NSMenu()
-            let copyItem = NSMenuItem(title: "复制图像 (⌘C)", action: #selector(PinWindowForm.copyImageAction), keyEquivalent: "")
+            let copyItem = NSMenuItem(title: L10n.pinCopyImage, action: #selector(PinWindowForm.copyImageAction), keyEquivalent: "")
             copyItem.target = owner
             menu.addItem(copyItem)
 
-            let resetItem = NSMenuItem(title: "还原 100% 尺寸", action: #selector(PinWindowForm.resetSizeAction), keyEquivalent: "")
+            let resetItem = NSMenuItem(title: L10n.pinResetSize, action: #selector(PinWindowForm.resetSizeAction), keyEquivalent: "")
             resetItem.target = owner
             menu.addItem(resetItem)
 
             menu.addItem(.separator())
 
-            let closeItem = NSMenuItem(title: "关闭贴图 (Esc / 双击)", action: #selector(PinWindowForm.closePinAction), keyEquivalent: "")
+            let closeItem = NSMenuItem(title: L10n.pinClose, action: #selector(PinWindowForm.closePinAction), keyEquivalent: "")
             closeItem.target = owner
             menu.addItem(closeItem)
 
@@ -109,6 +125,7 @@ public final class PinWindowForm: NSPanel {
     public init(sourceBitmap: RawBitmap, initialTopDownLocation: CGPoint? = nil) {
         self.pinnedBitmap = sourceBitmap.clone()
         self.pinnedNSImage = self.pinnedBitmap.toNSImage()
+        self.hasTransparentCorners = self.pinnedBitmap.getPixel(x: 0, y: 0).a == 0
 
         let activeScreen = ScreenCapturer.screenContaining(topDownPoint: initialTopDownLocation ?? ScreenCapturer.mouseLocationTopDown()) ?? NSScreen.main
         let screen = activeScreen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
@@ -122,12 +139,14 @@ public final class PinWindowForm: NSPanel {
             )
         }
 
-        let w = max(60.0, round(baseLogicalW * scaleFactor)) + 4.0
-        let h = max(40.0, round(baseLogicalH * scaleFactor)) + 4.0
+        let w = max(60.0, round(baseLogicalW * scaleFactor)) + (hasTransparentCorners ? 0.0 : 4.0)
+        let h = max(40.0, round(baseLogicalH * scaleFactor)) + (hasTransparentCorners ? 0.0 : 4.0)
 
         let frameRect: NSRect
         if let topLeft = initialTopDownLocation {
-            let td = CGRect(x: topLeft.x - 2, y: topLeft.y - 2, width: w, height: h)
+            let offsetX: CGFloat = hasTransparentCorners ? 38.0 : 2.0
+            let offsetY: CGFloat = hasTransparentCorners ? 26.0 : 2.0
+            let td = CGRect(x: topLeft.x - offsetX, y: topLeft.y - offsetY, width: w, height: h)
             frameRect = ScreenCapturer.topDownToCocoa(td)
         } else {
             frameRect = NSRect(
@@ -145,9 +164,12 @@ public final class PinWindowForm: NSPanel {
             defer: false
         )
 
-        self.isOpaque = true
+        self.isOpaque = !hasTransparentCorners
+        if hasTransparentCorners {
+            self.backgroundColor = .clear
+        }
         self.level = .floating
-        self.hasShadow = true
+        self.hasShadow = !hasTransparentCorners
         self.isReleasedWhenClosed = false
 
         let view = PinContentView(frame: NSRect(x: 0, y: 0, width: w, height: h))

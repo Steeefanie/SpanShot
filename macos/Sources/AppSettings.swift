@@ -7,10 +7,12 @@ public enum AppSettings {
     private static let prefKeyKeepAlive = "SpanShot.KeepInBackground"
     private static let prefKeyQuickCopy = "SpanShot.QuickCopyOnly"
     private static let prefKeyHideStatusBar = "SpanShot.HideStatusBarIcon"
+    private static let prefKeyWindowShadow = "SpanShot.WindowShadowCapture"
 
     public struct Preferences {
         public var keepInBackground: Bool = true
         public var hideStatusBarIcon: Bool = false
+        public var windowShadowCapture: Bool = true
         public var quickCopyOnly: Bool = false
         public var autoSave: Bool = false
         public var autoSaveDir: String = ""
@@ -18,12 +20,14 @@ public enum AppSettings {
         public init(
             keepInBackground: Bool = true,
             hideStatusBarIcon: Bool = false,
+            windowShadowCapture: Bool = true,
             quickCopyOnly: Bool = false,
             autoSave: Bool = false,
             autoSaveDir: String = ""
         ) {
             self.keepInBackground = keepInBackground
             self.hideStatusBarIcon = hideStatusBarIcon
+            self.windowShadowCapture = windowShadowCapture
             self.quickCopyOnly = quickCopyOnly
             self.autoSave = autoSave
             self.autoSaveDir = autoSaveDir
@@ -53,6 +57,9 @@ public enum AppSettings {
         if defaults.object(forKey: prefKeyHideStatusBar) != nil {
             prefs.hideStatusBarIcon = defaults.bool(forKey: prefKeyHideStatusBar)
         }
+        if defaults.object(forKey: prefKeyWindowShadow) != nil {
+            prefs.windowShadowCapture = defaults.bool(forKey: prefKeyWindowShadow)
+        }
         if defaults.object(forKey: prefKeyQuickCopy) != nil {
             prefs.quickCopyOnly = defaults.bool(forKey: prefKeyQuickCopy)
         }
@@ -72,12 +79,18 @@ public enum AppSettings {
                     prefs.keepInBackground = parseBool(val, defaultVal: true)
                 case "hidestatusbaricon":
                     prefs.hideStatusBarIcon = parseBool(val, defaultVal: false)
+                case "windowshadowcapture":
+                    prefs.windowShadowCapture = parseBool(val, defaultVal: true)
                 case "quickcopyonly":
                     prefs.quickCopyOnly = parseBool(val, defaultVal: false)
                 case "autosave":
                     prefs.autoSave = parseBool(val, defaultVal: false)
                 case "autosavedir":
                     prefs.autoSaveDir = val
+                case "language":
+                    if let lang = AppLanguage.fromCode(val) {
+                        L10n.setLanguage(lang)
+                    }
                 default:
                     break
                 }
@@ -95,6 +108,7 @@ public enum AppSettings {
     public static func savePreferences(
         keepInBackground: Bool,
         hideStatusBarIcon: Bool = false,
+        windowShadowCapture: Bool = true,
         quickCopyOnly: Bool,
         autoSave: Bool,
         autoSaveDir: String
@@ -102,6 +116,7 @@ public enum AppSettings {
         let defaults = UserDefaults.standard
         defaults.set(keepInBackground, forKey: prefKeyKeepAlive)
         defaults.set(hideStatusBarIcon, forKey: prefKeyHideStatusBar)
+        defaults.set(windowShadowCapture, forKey: prefKeyWindowShadow)
         defaults.set(quickCopyOnly, forKey: prefKeyQuickCopy)
 
         let path = settingsFilePath
@@ -111,9 +126,11 @@ public enum AppSettings {
         let lines = [
             "keepInBackground=\(keepInBackground ? "1" : "0")",
             "hideStatusBarIcon=\(hideStatusBarIcon ? "1" : "0")",
+            "windowShadowCapture=\(windowShadowCapture ? "1" : "0")",
             "quickCopyOnly=\(quickCopyOnly ? "1" : "0")",
             "autoSave=\(autoSave ? "1" : "0")",
-            "autoSaveDir=\(autoSaveDir)"
+            "autoSaveDir=\(autoSaveDir)",
+            "language=\(L10n.current.rawValue)"
         ]
         let text = lines.joined(separator: "\n") + "\n"
         try? text.write(toFile: path, atomically: true, encoding: .utf8)
@@ -187,9 +204,9 @@ public enum AppSettings {
     /// Prompts the user to pick a directory for auto-saving screenshots.
     public static func pickFolderDialog(currentDir: String) -> String? {
         let panel = NSOpenPanel()
-        panel.title = "选择截图自动保存目录"
-        panel.message = "请选择用于自动保存 SpanShot 截图的文件夹（需具备写入权限）"
-        panel.prompt = "选择文件夹"
+        panel.title = L10n.folderPickerTitle
+        panel.message = L10n.folderPickerMessage
+        panel.prompt = L10n.folderPickerPrompt
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.canCreateDirectories = true
