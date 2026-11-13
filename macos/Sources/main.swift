@@ -50,7 +50,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if startMinimized {
             form.orderOut(nil)
+            NSApp.setActivationPolicy(.accessory)
         } else {
+            NSApp.setActivationPolicy(.regular)
             NSApp.activate(ignoringOtherApps: true)
             form.makeKeyAndOrderFront(nil)
             if relaunchCapture {
@@ -62,7 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag {
+        if !(mainForm?.isVisible ?? false) {
             mainForm?.onMenuShowMain()
         }
         return true
@@ -70,7 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 let app = NSApplication.shared
-app.setActivationPolicy(.regular)
+app.setActivationPolicy(startMinimized ? .accessory : .regular)
 let delegate = AppDelegate()
 app.delegate = delegate
 app.run()

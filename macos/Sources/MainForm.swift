@@ -813,10 +813,6 @@ public final class MainForm: NSWindow, NSWindowDelegate {
         self.title = "SpanShot"
 
         self.standardWindowButton(.zoomButton)?.isEnabled = false
-        if let minBtn = self.standardWindowButton(.miniaturizeButton) {
-            minBtn.target = self
-            minBtn.action = #selector(onNativeMinimizeClicked)
-        }
 
         computeLayout(width: w, height: h)
 
@@ -850,10 +846,6 @@ public final class MainForm: NSWindow, NSWindowDelegate {
             NSApp.terminate(nil)
         }
         return false
-    }
-
-    @objc private func onNativeMinimizeClicked() {
-        minimizeToTray()
     }
 
     private func computeLayout(width w: CGFloat, height h: CGFloat) {
@@ -935,6 +927,9 @@ public final class MainForm: NSWindow, NSWindowDelegate {
         isRecordingHotkey = false
         isLanguageMenuOpen = false
         self.orderOut(nil)
+        if NSApp.activationPolicy() != .accessory {
+            NSApp.setActivationPolicy(.accessory)
+        }
     }
 
     public func windowDidResignKey(_ notification: Notification) {
@@ -1492,9 +1487,22 @@ public final class MainForm: NSWindow, NSWindowDelegate {
         UiTheme.refreshSystemTheme()
         self.appearance = NSAppearance(named: UiTheme.isDarkMode ? .darkAqua : .aqua)
         self.backgroundColor = UiTheme.bgDark
+        if NSApp.activationPolicy() != .regular {
+            NSApp.setActivationPolicy(.regular)
+            NSApp.applicationIconImage = AppIconRenderer.renderAppIconImage(pointSize: 512, useSystemGridMargin: true)
+            MainForm.rebuildApplicationMainMenu(mainForm: self)
+        }
+        if self.isMiniaturized {
+            self.deminiaturize(nil)
+        }
         NSApp.activate(ignoringOtherApps: true)
         self.makeKeyAndOrderFront(nil)
         self.contentView?.needsDisplay = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            NSApp.activate(ignoringOtherApps: true)
+            self.makeKeyAndOrderFront(nil)
+        }
     }
 
     @objc public func onMenuQuit() {
