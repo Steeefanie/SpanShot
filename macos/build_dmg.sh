@@ -54,32 +54,54 @@ cat > "$APP_DIR/Contents/Info.plist" << EOF
 </plist>
 EOF
 
-SOURCES=("$SCRIPT_DIR"/Sources/*.swift)
+ALL_SOURCES=("$SCRIPT_DIR"/Sources/*.swift)
+PROD_SOURCES=()
+for src in "${ALL_SOURCES[@]}"; do
+    if [[ "$(basename "$src")" != "SelfTestRunner.swift" ]]; then
+        PROD_SOURCES+=("$src")
+    fi
+done
 
-echo "==> Compiling SpanShot for Apple Silicon (arm64)..."
-swiftc -O -target arm64-apple-macosx14.0 -module-cache-path "$MODULE_CACHE" "${SOURCES[@]}" -o "$BUILD_DIR/SpanShot_arm64"
-chmod +x "$BUILD_DIR/SpanShot_arm64"
+SWIFT_PROD_FLAGS=(
+    -O
+    -whole-module-optimization
+    -Xfrontend -internalize-at-link
+    -Xlinker -dead_strip
+    -D PRODUCTION_BUILD
+    -module-cache-path "$MODULE_CACHE"
+)
 
-echo "==> Compiling SpanShot for Intel (x86_64) & creating Universal Binary..."
-if swiftc -O -target x86_64-apple-macosx14.0 -module-cache-path "$MODULE_CACHE" "${SOURCES[@]}" -o "$BUILD_DIR/SpanShot_x86_64"; then
-    lipo -create -output "$BUILD_DIR/SpanShot_universal" "$BUILD_DIR/SpanShot_arm64" "$BUILD_DIR/SpanShot_x86_64"
-    chmod +x "$BUILD_DIR/SpanShot_universal"
-else
-    cp "$BUILD_DIR/SpanShot_arm64" "$BUILD_DIR/SpanShot_universal"
-fi
+echo "==> Compiling build/test runner & running self-tests..."
+swiftc -O -target arm64-apple-macosx14.0 -module-cache-path "$MODULE_CACHE" "${ALL_SOURCES[@]}" -o "$BUILD_DIR/SpanShot_buildtool"
+chmod +x "$BUILD_DIR/SpanShot_buildtool"
 
 echo "==> Generating macOS AppIcon.icns from vector renderer..."
-"$BUILD_DIR/SpanShot_arm64" --generate-iconset "$ICONSET_DIR"
+"$BUILD_DIR/SpanShot_buildtool" --generate-iconset "$ICONSET_DIR"
 /usr/bin/iconutil -c icns "$ICONSET_DIR" -o "$ICNS_FILE"
 cp "$ICNS_FILE" "$RESOURCES_DIR/AppIcon.icns"
 rm -rf "$ICONSET_DIR"
 
 echo "==> Generating Retina DMG installer background (background.tiff)..."
-"$BUILD_DIR/SpanShot_arm64" --generate-dmg-bg "$DMG_BG_DIR"
+"$BUILD_DIR/SpanShot_buildtool" --generate-dmg-bg "$DMG_BG_DIR"
 /usr/bin/tiffutil -cathidpicheck "$DMG_BG_DIR/bg.png" "$DMG_BG_DIR/bg@2x.png" -out "$DMG_BG_DIR/background.tiff"
 
 echo "==> Running automated self-test suite (--self-test)..."
-"$BUILD_DIR/SpanShot_arm64" --self-test
+"$BUILD_DIR/SpanShot_buildtool" --self-test
+rm -f "$BUILD_DIR/SpanShot_buildtool"
+
+echo "==> Compiling stripped production SpanShot for Apple Silicon (arm64)..."
+swiftc "${SWIFT_PROD_FLAGS[@]}" -target arm64-apple-macosx14.0 "${PROD_SOURCES[@]}" -o "$BUILD_DIR/SpanShot_arm64"
+strip -x -S "$BUILD_DIR/SpanShot_arm64"
+chmod +x "$BUILD_DIR/SpanShot_arm64"
+
+echo "==> Compiling stripped production SpanShot for Intel (x86_64) & creating Universal Binary..."
+if swiftc "${SWIFT_PROD_FLAGS[@]}" -target x86_64-apple-macosx14.0 "${PROD_SOURCES[@]}" -o "$BUILD_DIR/SpanShot_x86_64"; then
+    strip -x -S "$BUILD_DIR/SpanShot_x86_64"
+    lipo -create -output "$BUILD_DIR/SpanShot_universal" "$BUILD_DIR/SpanShot_arm64" "$BUILD_DIR/SpanShot_x86_64"
+    chmod +x "$BUILD_DIR/SpanShot_universal"
+else
+    cp "$BUILD_DIR/SpanShot_arm64" "$BUILD_DIR/SpanShot_universal"
+fi
 
 package_dmg() {
     local bin_src="$1"
@@ -142,7 +164,7 @@ OSA
 
     sync
     hdiutil detach "$mount_dir" -force >/dev/null 2>&1 || hdiutil detach "$mount_dir" >/dev/null 2>&1
-    hdiutil convert "$rw_dmg" -format UDZO -imagekey zlib-level=9 -ov -o "$dmg_dest" >/dev/null
+    hdiutil convert "$rw_dmg" -format ULMO -ov -o "$dmg_dest" >/dev/null
     rm -rf "$DMG_STAGE" "$rw_dmg"
 }
 

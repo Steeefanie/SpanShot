@@ -75,7 +75,6 @@ public final class MainForm: NSWindow, NSWindowDelegate {
     fileprivate var bottomStatusRowRect: NSRect = .zero
     fileprivate var lnkUpdateActionRect: NSRect = .zero
     fileprivate var lnkIgnoreUpdateRect: NSRect = .zero
-    fileprivate var langPopupRect: NSRect = .zero
 
     private var activeSelector: RegionSelectorForm?
     private var activeScrollSession: ScrollCaptureSessionForm?
@@ -571,92 +570,13 @@ public final class MainForm: NSWindow, NSWindowDelegate {
             UiTheme.drawCenteredText(checkText, in: owner.lnkUpdateActionRect, font: subFont, color: linkColor, alignment: .center)
         }
 
-        private func drawLanguagePopupOverlay(owner: MainForm) {
-            let popup = owner.langPopupRect
-            let radius: CGFloat = 10.0
-
-            if let ctx = NSGraphicsContext.current?.cgContext {
-                ctx.saveGState()
-                ctx.setShadow(
-                    offset: CGSize(width: 0, height: -5.0),
-                    blur: 16.0,
-                    color: NSColor(srgbRed: 0, green: 0, blue: 0, alpha: UiTheme.isDarkMode ? 0.48 : 0.18).cgColor
-                )
-                let path = NSBezierPath(roundedRect: popup, xRadius: radius, yRadius: radius)
-                UiTheme.bgCard.setFill()
-                path.fill()
-                ctx.restoreGState()
-            }
-
-            UiTheme.fillAndStrokeRoundedRect(
-                popup,
-                radius: radius,
-                fillColor: UiTheme.bgCard,
-                strokeColor: UiTheme.borderSubtle,
-                lineWidth: 0.8
-            )
-
-            let langs = AppLanguage.allCases
-            let rowH: CGFloat = 28.0
-            for (idx, lang) in langs.enumerated() {
-                let rowRect = NSRect(
-                    x: popup.minX + 6.0,
-                    y: popup.minY + 6.0 + CGFloat(idx) * rowH,
-                    width: popup.width - 12.0,
-                    height: rowH
-                )
-                let isSelected = (lang == L10n.current)
-                let isHovered = rowRect.contains(owner.mousePos)
-
-                if isHovered {
-                    UiTheme.fillRoundedRect(
-                        rowRect,
-                        radius: 6.0,
-                        color: UiTheme.weChatGreen.withAlphaComponent(UiTheme.isDarkMode ? 0.22 : 0.12)
-                    )
-                }
-
-                if isSelected, let ctx = NSGraphicsContext.current?.cgContext {
-                    ctx.saveGState()
-                    ctx.setStrokeColor(UiTheme.weChatGreen.cgColor)
-                    ctx.setLineWidth(1.8)
-                    ctx.setLineCap(.round)
-                    ctx.setLineJoin(.round)
-                    let cx = rowRect.minX + 13.0
-                    let cy = rowRect.midY
-                    ctx.move(to: CGPoint(x: cx - 4.0, y: cy + 0.5))
-                    ctx.addLine(to: CGPoint(x: cx - 1.0, y: cy + 3.5))
-                    ctx.addLine(to: CGPoint(x: cx + 4.5, y: cy - 3.0))
-                    ctx.strokePath()
-                    ctx.restoreGState()
-                }
-
-                let textRect = NSRect(
-                    x: rowRect.minX + 25.0,
-                    y: rowRect.minY,
-                    width: rowRect.width - 30.0,
-                    height: rowRect.height
-                )
-                let font = NSFont.systemFont(ofSize: 12.5, weight: isSelected ? .semibold : .regular)
-                let textColor = isSelected ? UiTheme.weChatGreen : UiTheme.textPrimary
-                UiTheme.drawCenteredText(
-                    lang.displayName,
-                    in: textRect,
-                    font: font,
-                    color: textColor,
-                    alignment: .left
-                )
-            }
-        }
-
         override func mouseMoved(with event: NSEvent) {
             guard let owner = owner else { return }
             let pt = convert(event.locationInWindow, from: nil)
             owner.mousePos = pt
 
             if owner.isLanguageMenuOpen {
-                let inPopupOrBtn = owner.langPopupRect.contains(pt) || owner.btnLangRect.contains(pt)
-                if inPopupOrBtn {
+                if owner.btnLangRect.contains(pt) {
                     NSCursor.pointingHand.set()
                 } else {
                     NSCursor.arrow.set()
@@ -944,9 +864,6 @@ public final class MainForm: NSWindow, NSWindowDelegate {
 
         // Unified 52pt header bar: left traffic lights at x=19, centerY=26; right Globe button at x=w-19-26, centerY=26
         btnLangRect = NSRect(x: w - padX - 26, y: 13, width: 26, height: 26)
-        let popupW: CGFloat = 148
-        let popupH: CGFloat = CGFloat(AppLanguage.allCases.count) * 28.0 + 12.0
-        langPopupRect = NSRect(x: w - padX - popupW, y: 44, width: popupW, height: popupH)
         headerRect = NSRect(x: 84, y: 0, width: w - 84 - 48, height: 50)
         btnMinimizeRect = .zero
         btnCloseRect = .zero

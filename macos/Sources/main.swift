@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 
 let args = CommandLine.arguments
+#if !PRODUCTION_BUILD
 if args.contains("--self-test") {
     exit(SelfTestRunner.runAllTests())
 }
@@ -27,6 +28,7 @@ if let idx = args.firstIndex(of: "--generate-dmg-bg"), idx + 1 < args.count {
         exit(1)
     }
 }
+#endif
 
 let startMinimized = args.contains { arg in
     arg.caseInsensitiveCompare("--autostart") == .orderedSame ||
